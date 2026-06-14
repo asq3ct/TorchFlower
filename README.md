@@ -12,7 +12,7 @@ TorchFlower is a Rust-first Minecraft Bedrock bot engine for authenticated sessi
 
 ## Quickstart
 
-Get a bot authenticated and running in five steps.
+Get a bot authenticated and running in five steps.(Is being worked on as the auth breaks sometimes.)
 
 **Step 1 — Configure the engine**
 
