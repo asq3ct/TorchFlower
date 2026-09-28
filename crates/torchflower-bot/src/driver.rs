@@ -2286,10 +2286,12 @@ impl<T: Transport> Driver<T> {
     ///
     /// * snaps the simulated player and replaces its velocity (the server's
     ///   velocity for corrections, zero otherwise), clearing fall distance;
-    /// * resets the delta sent with the next input so the server does not
-    ///   see a jump from the stale position;
     /// * tells an active navigation's [`PathFollower`] about the jump so the
     ///   path is kept (or re-planned) instead of reported as stuck.
+    ///
+    /// The delta reported by the next `PlayerAuthInput` needs no special care:
+    /// it is measured from the position the tick started at, which is now the
+    /// corrected one, so the jump itself is never reported as movement.
     ///
     /// Note that the local tick counter is deliberately left alone: the tick
     /// a correction carries is the bot's *own* input tick echoed back, and the
@@ -2305,7 +2307,6 @@ impl<T: Transport> Driver<T> {
         st.player.apply_correction(feet, velocity, on_ground);
         st.player.jump_cooldown = 0;
         st.world.set_center(st.player.block_pos());
-        self.last_delta = Vec3::ZERO;
         if let Some(nav) = self.nav.as_mut() {
             if !nav
                 .follower

@@ -51,7 +51,7 @@ BDS with `server-authoritative-movement` checks every `PlayerAuthInput` against 
 For both packets, when they target the bot, the driver does four things:
 
 - **Snaps the simulated player.** It sets the position and replaces the velocity: the server's velocity for a correction, zero for a teleport. It also clears the fall distance and the jump cooldown. The velocity is clamped to 10 blocks/tick per axis and non-finite values are dropped, so a malformed packet cannot make the next collision sweep enumerate an unbounded region.
-- **Clears the reported delta.** The next `PlayerAuthInput` reports a zero delta, so the server does not see a jump from the stale position.
+- **Never reports the jump as movement.** The delta on each `PlayerAuthInput` is measured from the position that tick started at, which after a correction is the corrected position, so the server never sees a jump from the stale one.
 - **Acknowledges teleports.** It sets `HandledTeleport` on the next input.
 - **Keeps navigation going.** The path follower resets its stall detection and re-anchors to the step nearest the corrected position — forward if the server pushed the bot along the path, backward if it pulled it back down the part already walked. If no step is within 2.5 blocks, it re-plans instead of giving up.
 

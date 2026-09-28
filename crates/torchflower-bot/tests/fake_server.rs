@@ -608,8 +608,8 @@ async fn movement_correction_snaps_state_and_keeps_navigating() {
     tokio::time::sleep(Duration::from_millis(60)).await;
     server.drain();
     let inputs = server.auth_inputs();
-    // The first input after the correction continues from the server tick
-    // and reports the corrected position with no stale delta.
+    // The first input after the correction reports the corrected position, and
+    // its delta is one tick of walking — never the jump back to it.
     let first = inputs
         .iter()
         .find(|i| i.tick > last_tick)
@@ -621,6 +621,13 @@ async fn movement_correction_snaps_state_and_keeps_navigating() {
     );
     assert!((first.position[1] - 66.62).abs() < 1e-3);
     assert!(first.delta[1].abs() < 1e-6, "no stale vertical delta");
+    let jumped_back = (before.x - 8.5).abs() as f32;
+    assert!(jumped_back > 0.3, "the correction really moved the bot");
+    let reported = first.delta[0].hypot(first.delta[2]);
+    assert!(
+        reported < 0.3 && reported < jumped_back,
+        "delta is one tick of walking, not the {jumped_back} block jump: {reported}"
+    );
     assert!(
         inputs.windows(2).all(|w| w[1].tick == w[0].tick + 1),
         "the input tick is a local clock: it only ever advances by one"
