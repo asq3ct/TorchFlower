@@ -852,6 +852,14 @@ impl BedrockProtocolAdapter {
         })
     }
 
+    /// Receives the next game batch and returns the decrypted, decompressed
+    /// packet stream (length-prefixed packets) without decoding it. Used by
+    /// `torchflower-bot`, which performs its own zero-copy decoding.
+    pub async fn recv_raw(&mut self) -> EngineResult<Vec<u8>> {
+        let payload = self.transport.recv_game_packet().await?;
+        self.prepare_inbound_packet_stream(payload)
+    }
+
     pub async fn close(&self) {
         self.transport.close().await;
     }
@@ -1260,6 +1268,12 @@ fn count_packet_summaries(packet_stream: &[u8]) -> EngineResult<usize> {
         count += 1;
     }
     Ok(count)
+}
+
+/// Parses the policy-relevant fields of a `StartGame` payload (the bytes
+/// after the packet header).
+pub fn observe_start_game(payload: &[u8]) -> Option<ObservedStartGame> {
+    read_start_game_observation(payload, 0)
 }
 
 fn read_start_game_observation(packet: &[u8], payload_offset: usize) -> Option<ObservedStartGame> {

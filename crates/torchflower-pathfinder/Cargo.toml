@@ -1,0 +1,17 @@
+[package]
+name = "torchflower-pathfinder"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Bounded A* pathfinding (walk, jump, drop, parkour, bridge, dig) and path following for TorchFlower bots."
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/torchflower-pathfinder"
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+
+[dependencies]
+torchflower-world = { version = "0.1.0", path = "../torchflower-world" }
+torchflower-physics = { version = "0.1.0", path = "../torchflower-physics" }

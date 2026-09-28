@@ -15,3 +15,7 @@ pub use torchflower_addon as addon;
 
 #[cfg(feature = "level")]
 pub use torchflower_level as level;
+
+/// Mineflayer-style high-level bot API (world, physics, inventory, pathfinding).
+#[cfg(feature = "bot")]
+pub use torchflower_bot as bot;

@@ -3832,6 +3832,7 @@ version = "0.1.0"
 dependencies = [
  "torchflower-addon",
  "torchflower-auth",
+ "torchflower-bot",
  "torchflower-client",
  "torchflower-data",
  "torchflower-engine",
@@ -3873,6 +3874,22 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+]
+
+[[package]]
+name = "torchflower-bot"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+ "tokio",
+ "torchflower-engine",
+ "torchflower-inventory",
+ "torchflower-pathfinder",
+ "torchflower-physics",
+ "torchflower-protocol",
+ "torchflower-protocol-core",
+ "torchflower-world",
+ "uuid",
 ]
 
 [[package]]
@@ -3945,6 +3962,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "torchflower-inventory"
+version = "0.1.0"
+dependencies = [
+ "torchflower-protocol-core",
+ "torchflower-world",
+]
+
+[[package]]
 name = "torchflower-level"
 version = "0.1.0"
 dependencies = [
@@ -3981,6 +4006,21 @@ dependencies = [
  "rand 0.8.6",
  "thiserror",
  "tokio",
+]
+
+[[package]]
+name = "torchflower-pathfinder"
+version = "0.1.0"
+dependencies = [
+ "torchflower-physics",
+ "torchflower-world",
+]
+
+[[package]]
+name = "torchflower-physics"
+version = "0.1.0"
+dependencies = [
+ "torchflower-world",
 ]
 
 [[package]]
@@ -4051,6 +4091,13 @@ dependencies = [
  "chrono",
  "tokio",
  "torchflower",
+]
+
+[[package]]
+name = "torchflower-world"
+version = "0.1.0"
+dependencies = [
+ "torchflower-protocol-core",
 ]
 
 [[package]]

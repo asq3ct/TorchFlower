@@ -25,11 +25,13 @@ torchflower-server = { version = "0.1.0", path = "../torchflower-server" }
 torchflower-data = { version = "0.1.0", path = "../torchflower-data" }
 torchflower-level = { version = "0.1.0", path = "../torchflower-level", optional = true }
 torchflower-addon = { version = "0.1.0", path = "../torchflower-addon", optional = true }
+torchflower-bot = { version = "0.1.0", path = "../torchflower-bot", optional = true }
 
 [features]
 default = []
 level = ["torchflower-level"]
 addon = ["torchflower-addon"]
+bot = ["torchflower-bot"]
 offline-mode = ["torchflower-auth/offline-mode"]
 console = ["torchflower-engine/console"]
 easy-auth = ["torchflower-engine/easy-auth"]

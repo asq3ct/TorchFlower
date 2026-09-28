@@ -103,6 +103,11 @@ cargo run --example quickstart
 | `torchflower-api` | Authenticated REST API wrapper around the engine | unpublished |
 | `torchflower-level` | Bedrock world-folder and LevelDB key utilities | unpublished |
 | `torchflower-addon` | Addon manifest and `.mcpack`/`.mcaddon` helpers | unpublished |
+| `torchflower-world` | Sparse, memory-bounded voxel window, block registry, chunk/sub-chunk decoding, raycasts | unpublished |
+| `torchflower-physics` | 20 Hz headless player physics and `PlayerAuthInput` flag generation | unpublished |
+| `torchflower-inventory` | Inventory/container model, `ItemStackRequest` builders, recipes and crafting planner | unpublished |
+| `torchflower-pathfinder` | Bounded A* (walk/jump/drop/parkour/bridge/dig) and path following | unpublished |
+| `torchflower-bot` | Mineflayer-style async `Bot` API built on the crates above (see [docs/bot-engine.md](docs/bot-engine.md)) | unpublished |
 
 ## Feature Flags
 
@@ -111,6 +116,7 @@ cargo run --example quickstart
 | `offline-mode` | `torchflower`, `torchflower-auth` | Enables local/offline auth config for local servers that do not require online-mode authentication. |
 | `level` | `torchflower` | Re-exports `torchflower-level`. |
 | `addon` | `torchflower` | Re-exports `torchflower-addon`. |
+| `bot` | `torchflower` | Re-exports `torchflower-bot` as `torchflower::bot`. |
 | `console` | `torchflower`, `torchflower-engine` | Enables tokio-console runtime instrumentation. |
 
 ## Authentication

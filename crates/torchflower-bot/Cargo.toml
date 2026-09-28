@@ -1,0 +1,33 @@
+[package]
+name = "torchflower-bot"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "High-level async Bedrock bot API (Mineflayer-style) built on TorchFlower's world, physics, inventory and pathfinding crates."
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/torchflower-bot"
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+
+[dependencies]
+thiserror = "2.0"
+tokio = { version = "1.50", features = ["macros", "rt", "sync", "time"] }
+uuid = { version = "1.11", features = ["v4"] }
+torchflower-engine = { version = "0.1.0", path = "../torchflower-engine", default-features = false }
+torchflower-protocol = { version = "0.1.0", path = "../torchflower-protocol" }
+torchflower-protocol-core = { version = "0.1.0", path = "../torchflower-protocol-core" }
+torchflower-world = { version = "0.1.0", path = "../torchflower-world" }
+torchflower-physics = { version = "0.1.0", path = "../torchflower-physics" }
+torchflower-inventory = { version = "0.1.0", path = "../torchflower-inventory" }
+torchflower-pathfinder = { version = "0.1.0", path = "../torchflower-pathfinder" }
+
+[dev-dependencies]
+torchflower-inventory = { version = "0.1.0", path = "../torchflower-inventory" }
+torchflower-protocol = { version = "0.1.0", path = "../torchflower-protocol" }
+tokio = { version = "1.50", features = ["macros", "rt-multi-thread", "sync", "time", "test-util"] }
+torchflower-world = { version = "0.1.0", path = "../torchflower-world" }
+torchflower-physics = { version = "0.1.0", path = "../torchflower-physics" }
+torchflower-protocol-core = { version = "0.1.0", path = "../torchflower-protocol-core" }
