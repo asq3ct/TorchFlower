@@ -4097,6 +4097,7 @@ dependencies = [
 name = "torchflower-world"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "torchflower-protocol-core",
 ]
 

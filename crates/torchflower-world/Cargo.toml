@@ -11,6 +11,8 @@ documentation = "https://docs.rs/torchflower-world"
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
+include = ["src/**/*.rs", "data/palettes/*.bin", "tools/*.py", "README.md"]
 
 [dependencies]
+flate2 = "1.1"
 torchflower-protocol-core = { version = "0.1.0", path = "../torchflower-protocol-core" }

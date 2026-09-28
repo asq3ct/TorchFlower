@@ -22,8 +22,11 @@ use torchflower_protocol_core::wire::WireError;
 /// Integer block coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 pub struct BlockPos {
+    /// X coordinate.
     pub x: i32,
+    /// Y coordinate.
     pub y: i32,
+    /// Z coordinate.
     pub z: i32,
 }
 
@@ -136,6 +139,7 @@ pub struct SparseWorld {
     center_chunk: (i32, i32),
     center_sub: i8,
     columns: Vec<Option<Column>>,
+    max_seen_runtime_id: u32,
 }
 
 /// Outcome of inserting a `LevelChunk`.
@@ -164,6 +168,7 @@ impl SparseWorld {
             center_chunk: (0, 0),
             center_sub: 4,
             columns,
+            max_seen_runtime_id: 0,
         };
         world.set_dimension(0);
         world
@@ -352,7 +357,28 @@ impl SparseWorld {
         }
     }
 
+    /// Highest block runtime id seen in received chunk data.
+    ///
+    /// With [`crate::RuntimeIdMode::Sequential`] every id is an index into the
+    /// palette, so a value at or above [`BlockRegistry::len`] means the
+    /// server is really sending hashed ids.
+    pub fn max_seen_runtime_id(&self) -> u32 {
+        self.max_seen_runtime_id
+    }
+
+    /// True if received chunk data cannot be palette indices for the current
+    /// registry, i.e. the runtime-id mode was guessed wrong.
+    pub fn runtime_ids_look_hashed(&self) -> bool {
+        self.registry.mode() == crate::RuntimeIdMode::Sequential
+            && !self.registry.is_empty()
+            && self.max_seen_runtime_id as usize >= self.registry.len()
+    }
+
     fn store_sub(&mut self, cx: i32, sy: i32, cz: i32, sub: SubChunk) {
+        for layer in sub.layers.iter().flatten() {
+            let highest = layer.palette().iter().copied().max().unwrap_or(0);
+            self.max_seen_runtime_id = self.max_seen_runtime_id.max(highest);
+        }
         let Some(i) = self.sub_index(sy) else { return };
         let hot = self.is_hot(sy as i8);
         let air = self.registry.air_runtime_id();

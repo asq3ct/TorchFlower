@@ -126,8 +126,11 @@ pub mod memory {
     /// Everything the bot sent.
     #[derive(Debug)]
     pub enum Sent {
+        /// A batch of length-prefixed packets.
         Raw(Vec<u8>),
+        /// Packets for the typed encoder.
         Typed(Vec<Packet>),
+        /// A `NetworkStackLatency` answer for this timestamp.
         Latency(i64),
     }
 
@@ -140,7 +143,9 @@ pub mod memory {
 
     /// Server side of an in-memory connection.
     pub struct MemoryServer {
+        /// Packet batches to deliver to the bot.
         pub to_bot: mpsc::UnboundedSender<Vec<u8>>,
+        /// Everything the bot sent.
         pub from_bot: mpsc::UnboundedReceiver<Sent>,
     }
 

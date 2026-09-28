@@ -6,45 +6,73 @@
 use torchflower_protocol_core::wire::{WireError, WireReader};
 use torchflower_world::{can_harvest, dig_ticks, BlockRef, DigContext, Tool};
 
-use crate::item::{ItemRegistry, ItemStack};
+use crate::item::{ItemFormat, ItemRegistry, ItemStack};
 
 /// Window ids used by the player inventory.
 pub mod window_id {
+    /// Main inventory and hotbar.
     pub const INVENTORY: u32 = 0;
+    /// First id used for opened containers.
     pub const FIRST_CONTAINER: u32 = 1;
+    /// Off-hand slot.
     pub const OFFHAND: u32 = 119;
+    /// Armor slots.
     pub const ARMOR: u32 = 120;
+    /// Creative inventory.
     pub const CREATIVE: u32 = 121;
+    /// UI window (cursor, crafting grid).
     pub const UI: u32 = 124;
 }
 
 /// `ContainerSlotType` ids used in item stack requests/responses.
 pub mod slot_type {
+    /// Armor slots.
     pub const ARMOR: u8 = 6;
+    /// A placed container (chest, barrel, ...).
     pub const LEVEL_ENTITY: u8 = 7;
+    /// Hotbar and main inventory as one container (slots 0–35).
     pub const HOTBAR_AND_INVENTORY: u8 = 12;
+    /// Crafting grid input.
     pub const CRAFTING_INPUT: u8 = 13;
+    /// Furnace fuel slot.
     pub const FURNACE_FUEL: u8 = 24;
+    /// Furnace input slot.
     pub const FURNACE_INGREDIENT: u8 = 25;
+    /// Furnace output slot.
     pub const FURNACE_RESULT: u8 = 26;
+    /// Hotbar only.
     pub const HOTBAR: u8 = 28;
+    /// Main inventory only.
     pub const INVENTORY: u8 = 29;
+    /// Shulker box.
     pub const SHULKER_BOX: u8 = 30;
+    /// Off-hand slot.
     pub const OFFHAND: u8 = 34;
+    /// Barrel.
     pub const BARREL: u8 = 58;
+    /// The item held by the cursor.
     pub const CURSOR: u8 = 59;
+    /// Output of a craft.
     pub const CREATED_OUTPUT: u8 = 60;
+    /// Dynamic container (bundles and similar).
     pub const DYNAMIC: u8 = 63;
 }
 
 /// `ContainerType` of an opened window (from `ContainerOpen`).
 pub mod container_type {
+    /// Player inventory.
     pub const INVENTORY: i8 = -1;
+    /// Chest-like container.
     pub const CONTAINER: i8 = 0;
+    /// Crafting table.
     pub const WORKBENCH: i8 = 1;
+    /// Furnace.
     pub const FURNACE: i8 = 2;
+    /// Hopper.
     pub const HOPPER: i8 = 8;
+    /// Blast furnace.
     pub const BLAST_FURNACE: i8 = 27;
+    /// Smoker.
     pub const SMOKER: i8 = 28;
 }
 
@@ -58,16 +86,22 @@ pub const CREATED_OUTPUT_SLOT: u8 = 50;
 /// Hand selector.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hand {
+    /// Main hand (the selected hotbar slot).
     Main,
+    /// Off-hand.
     Off,
 }
 
 /// Slot reference inside an `ItemStackRequest`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SlotInfo {
+    /// Container slot type (see [`slot_type`]).
     pub container: u8,
+    /// Dynamic container id, for dynamic containers.
     pub dynamic_id: Option<u32>,
+    /// Slot index within the container.
     pub slot: u8,
+    /// Stack network id the client expects in the slot.
     pub stack_id: i32,
 }
 
@@ -86,10 +120,15 @@ impl SlotInfo {
 /// An open container window.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Window {
+    /// Window id.
     pub id: u8,
+    /// Container type (see [`container_type`]).
     pub kind: i8,
+    /// Position of the container block.
     pub position: [i32; 3],
+    /// Unique id of the container entity (−1 for blocks).
     pub entity_unique_id: i64,
+    /// Contents, as sent by the server.
     pub slots: Vec<ItemStack>,
 }
 
@@ -408,20 +447,36 @@ impl Inventory {
 /// Decoded `ContainerOpen` (0x2e).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ContainerOpen {
+    /// Window id to use for the container.
     pub window_id: u8,
+    /// Container type (see [`container_type`]).
     pub container_type: i8,
+    /// Position of the container block.
     pub position: [i32; 3],
+    /// Unique id of the container entity (−1 for blocks).
     pub entity_unique_id: i64,
 }
 
 impl ContainerOpen {
-    /// Decodes the payload.
+    /// Decodes the payload (protocol 898 layout).
     pub fn decode(payload: &[u8]) -> Result<Self, WireError> {
+        Self::decode_for(payload, 898)
+    }
+
+    /// Decodes the payload for `protocol`.
+    pub fn decode_for(payload: &[u8], protocol: i32) -> Result<Self, WireError> {
         let mut r = WireReader::new(payload);
+        let window_id = r.u8()?;
+        let container_type = r.i8()?;
+        let position = if protocol >= SIGNED_BLOCK_POS_PROTOCOL {
+            r.block_pos()?
+        } else {
+            r.ublock_pos()?
+        };
         Ok(Self {
-            window_id: r.u8()?,
-            container_type: r.i8()?,
-            position: r.ublock_pos()?,
+            window_id,
+            container_type,
+            position,
             entity_unique_id: r.var_i64()?,
         })
     }
@@ -439,8 +494,30 @@ fn skip_full_container_name(r: &mut WireReader<'_>) -> Result<(u8, Option<u32>),
     Ok((id, dynamic))
 }
 
-/// Decodes `InventoryContent` (0x31): `(window_id, items)`.
+/// Protocol version from which `InventorySlot` uses optional container /
+/// storage fields and compact items (1.26.20).
+pub const INVENTORY_SLOT_COMPACT_PROTOCOL: i32 = 975;
+/// Protocol version from which `InventoryContent` uses compact items (1.26.30).
+pub const INVENTORY_CONTENT_COMPACT_PROTOCOL: i32 = 1001;
+/// Protocol version from which `ContainerOpen` uses a signed block position
+/// (1.26.10).
+pub const SIGNED_BLOCK_POS_PROTOCOL: i32 = 944;
+
+/// Decodes `InventoryContent` (0x31) for protocol 898: `(window_id, items)`.
 pub fn decode_inventory_content(payload: &[u8]) -> Result<(u32, Vec<ItemStack>), WireError> {
+    decode_inventory_content_for(payload, 898)
+}
+
+/// Decodes `InventoryContent` (0x31) for `protocol`: `(window_id, items)`.
+pub fn decode_inventory_content_for(
+    payload: &[u8],
+    protocol: i32,
+) -> Result<(u32, Vec<ItemStack>), WireError> {
+    let format = if protocol >= INVENTORY_CONTENT_COMPACT_PROTOCOL {
+        ItemFormat::Compact
+    } else {
+        ItemFormat::Legacy
+    };
     let mut r = WireReader::new(payload);
     let window = r.var_u32()?;
     let count = r.var_u32()? as usize;
@@ -449,35 +526,59 @@ pub fn decode_inventory_content(payload: &[u8]) -> Result<(u32, Vec<ItemStack>),
     }
     let mut items = Vec::with_capacity(count);
     for _ in 0..count {
-        items.push(ItemStack::read_instance(&mut r)?);
+        items.push(ItemStack::read_with(&mut r, format)?);
     }
     Ok((window, items))
 }
 
-/// Decodes `InventorySlot` (0x32): `(window_id, slot, item)`.
+/// Decodes `InventorySlot` (0x32) for protocol 898: `(window_id, slot, item)`.
 pub fn decode_inventory_slot(payload: &[u8]) -> Result<(u32, u32, ItemStack), WireError> {
+    decode_inventory_slot_for(payload, 898)
+}
+
+/// Decodes `InventorySlot` (0x32) for `protocol`: `(window_id, slot, item)`.
+pub fn decode_inventory_slot_for(
+    payload: &[u8],
+    protocol: i32,
+) -> Result<(u32, u32, ItemStack), WireError> {
     let mut r = WireReader::new(payload);
     let window = r.var_u32()?;
     let slot = r.var_u32()?;
-    skip_full_container_name(&mut r)?;
-    ItemStack::read_instance(&mut r)?; // storage item
-    let item = ItemStack::read_instance(&mut r)?;
+    let item = if protocol >= INVENTORY_SLOT_COMPACT_PROTOCOL {
+        if r.bool()? {
+            skip_full_container_name(&mut r)?;
+        }
+        if r.bool()? {
+            ItemStack::read_compact(&mut r)?; // storage item
+        }
+        ItemStack::read_compact(&mut r)?
+    } else {
+        skip_full_container_name(&mut r)?;
+        ItemStack::read_instance(&mut r)?; // storage item
+        ItemStack::read_instance(&mut r)?
+    };
     Ok((window, slot, item))
 }
 
 /// Slot update in an `ItemStackResponse`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StackResponseSlot {
+    /// Slot index.
     pub slot: u8,
+    /// New item count (0 = empty).
     pub count: u8,
+    /// New stack network id.
     pub stack_id: i32,
 }
 
 /// Container update in an `ItemStackResponse`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StackResponseContainer {
+    /// Container slot type (see [`slot_type`]).
     pub container: u8,
+    /// Dynamic container id, for dynamic containers.
     pub dynamic_id: Option<u32>,
+    /// Updated slots.
     pub slots: Vec<StackResponseSlot>,
 }
 
@@ -486,7 +587,9 @@ pub struct StackResponseContainer {
 pub struct StackResponse {
     /// 0 = OK.
     pub status: u8,
+    /// Id of the request this answers.
     pub request_id: i32,
+    /// Slots changed by the request (only when OK).
     pub containers: Vec<StackResponseContainer>,
 }
 
@@ -611,12 +714,60 @@ mod tests {
     }
 
     #[test]
+    fn slot_and_content_decode_across_protocols() {
+        let item = ItemStack {
+            extra: vec![0u8; 10].into(),
+            ..item(7, 3)
+        };
+        // 898: full container name, legacy storage item, legacy item.
+        let mut p = Vec::new();
+        put_var_u32(&mut p, 0);
+        put_var_u32(&mut p, 5);
+        p.extend_from_slice(&[12, 0]);
+        ItemStack::default().write_instance(&mut p);
+        item.write_instance(&mut p);
+        assert_eq!(
+            decode_inventory_slot_for(&p, 898).unwrap(),
+            (0, 5, item.clone())
+        );
+        // 975: optional container / storage, compact item.
+        let mut p = Vec::new();
+        put_var_u32(&mut p, 0);
+        put_var_u32(&mut p, 5);
+        p.extend_from_slice(&[1, 12, 0]);
+        p.push(0);
+        item.write_compact(&mut p);
+        assert_eq!(
+            decode_inventory_slot_for(&p, 975).unwrap(),
+            (0, 5, item.clone())
+        );
+        // 1001: compact items in InventoryContent, including compact air.
+        let mut p = Vec::new();
+        put_var_u32(&mut p, 0);
+        put_var_u32(&mut p, 2);
+        ItemStack::default().write_compact(&mut p);
+        item.write_compact(&mut p);
+        let (w, items) = decode_inventory_content_for(&p, 1001).unwrap();
+        assert_eq!((w, items.len()), (0, 2));
+        assert!(items[0].is_empty());
+        assert_eq!(items[1], item);
+    }
+
+    #[test]
     fn container_open_decode() {
         let mut p = vec![3u8, 0];
         torchflower_protocol_core::wire::put_ublock_pos(&mut p, [1, 64, -2]);
         torchflower_protocol_core::wire::put_var_i64(&mut p, -1);
         let open = ContainerOpen::decode(&p).unwrap();
         assert_eq!(open.position, [1, 64, -2]);
+        // Signed Y from protocol 944.
+        let mut p = vec![3u8, 0];
+        torchflower_protocol_core::wire::put_block_pos(&mut p, [1, -40, -2]);
+        torchflower_protocol_core::wire::put_var_i64(&mut p, -1);
+        assert_eq!(
+            ContainerOpen::decode_for(&p, 944).unwrap().position,
+            [1, -40, -2]
+        );
         let mut inv = Inventory::default();
         inv.apply_container_open(open);
         inv.apply_slot(3, 5, item(1, 2));

@@ -18,6 +18,7 @@ pub const RENDER_HEIGHTMAP_PROTOCOL: i32 = 818;
 /// Decoded sub-chunk: layer 0 (blocks) and optional layer 1 (water-logging).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubChunk {
+    /// Storage layer 0 (blocks) and optional layer 1 (water-logging).
     pub layers: [Option<PalettedStorage>; 2],
 }
 
@@ -104,16 +105,24 @@ pub enum SubChunkMode {
     /// Client must request sub-chunks; no limit.
     RequestLimitless,
     /// Client must request sub-chunks up to (and including) `highest`.
-    RequestLimited { highest: u16 },
+    RequestLimited {
+        /// Highest sub-chunk index, relative to the dimension minimum.
+        highest: u16,
+    },
 }
 
 /// `LevelChunk` header plus a borrowed payload.
 #[derive(Debug, Clone)]
 pub struct LevelChunk<'a> {
+    /// Chunk X coordinate.
     pub chunk_x: i32,
+    /// Chunk Z coordinate.
     pub chunk_z: i32,
+    /// Dimension id.
     pub dimension: i32,
+    /// How the sub-chunks are delivered.
     pub mode: SubChunkMode,
+    /// Whether the blob cache is used (payloads are then not inline).
     pub cache_enabled: bool,
     /// Raw payload (sub-chunks, biomes, border blocks, block entities).
     pub payload: &'a [u8],
@@ -186,12 +195,19 @@ impl<'a> LevelChunk<'a> {
 /// Result code of a sub-chunk entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubChunkResult {
+    /// No result.
     Undefined,
+    /// The sub-chunk payload follows.
     Success,
+    /// The column is not loaded on the server.
     ChunkNotFound,
+    /// Wrong dimension.
     InvalidDimension,
+    /// The requesting player was not found.
     PlayerNotFound,
+    /// Sub-chunk index outside the world.
     IndexOutOfBounds,
+    /// The sub-chunk is entirely air.
     SuccessAllAir,
 }
 
@@ -212,10 +228,15 @@ impl From<u8> for SubChunkResult {
 /// Decoded `SubChunk` entry in absolute sub-chunk coordinates.
 #[derive(Debug, Clone)]
 pub struct SubChunkEntry<'a> {
+    /// Sub-chunk X (chunk coordinates).
     pub x: i32,
+    /// Sub-chunk Y index.
     pub y: i32,
+    /// Sub-chunk Z (chunk coordinates).
     pub z: i32,
+    /// Result code.
     pub result: SubChunkResult,
+    /// Serialized sub-chunk (empty unless `Success`).
     pub payload: &'a [u8],
 }
 
@@ -261,18 +282,30 @@ pub fn decode_sub_chunk_packet<'a>(
     Ok(dimension)
 }
 
-/// Appends a framed `SubChunkRequest` asking for the given absolute
-/// sub-chunk positions (all within ±127 of `base`).
+/// First protocol whose `SubChunkRequest` puts a varuint offset count before
+/// the offsets and the base position as little-endian `int32`s (1.26.30).
+pub const SUB_CHUNK_REQUEST_V2_PROTOCOL: i32 = 1001;
+
+/// Appends a framed `SubChunkRequest` (protocol < 1001 layout) asking for the
+/// given absolute sub-chunk positions (all within ±127 of `base`).
 pub fn encode_sub_chunk_request(
     out: &mut Vec<u8>,
     dimension: i32,
     base: [i32; 3],
     positions: &[[i32; 3]],
 ) {
-    use torchflower_protocol_core::wire::{begin_packet, end_packet, put_block_pos};
-    let mark = begin_packet(out, SUB_CHUNK_REQUEST_ID);
-    put_var_i32(out, dimension);
-    put_block_pos(out, base);
+    encode_sub_chunk_request_for(out, 898, dimension, base, positions);
+}
+
+/// Appends a framed `SubChunkRequest` for `protocol`.
+pub fn encode_sub_chunk_request_for(
+    out: &mut Vec<u8>,
+    protocol: i32,
+    dimension: i32,
+    base: [i32; 3],
+    positions: &[[i32; 3]],
+) {
+    use torchflower_protocol_core::wire::{begin_packet, end_packet, put_block_pos, put_var_u32};
     let valid: Vec<[i8; 3]> = positions
         .iter()
         .filter_map(|p| {
@@ -282,9 +315,22 @@ pub fn encode_sub_chunk_request(
                 .then(|| [d[0] as i8, d[1] as i8, d[2] as i8])
         })
         .collect();
-    out.extend_from_slice(&(valid.len() as u32).to_le_bytes());
-    for d in valid {
-        out.extend_from_slice(&[d[0] as u8, d[1] as u8, d[2] as u8]);
+    let mark = begin_packet(out, SUB_CHUNK_REQUEST_ID);
+    put_var_i32(out, dimension);
+    if protocol >= SUB_CHUNK_REQUEST_V2_PROTOCOL {
+        put_var_u32(out, valid.len() as u32);
+        for d in &valid {
+            out.extend_from_slice(&[d[0] as u8, d[1] as u8, d[2] as u8]);
+        }
+        for v in base {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+    } else {
+        put_block_pos(out, base);
+        out.extend_from_slice(&(valid.len() as u32).to_le_bytes());
+        for d in valid {
+            out.extend_from_slice(&[d[0] as u8, d[1] as u8, d[2] as u8]);
+        }
     }
     end_packet(out, mark);
 }
@@ -368,6 +414,21 @@ mod tests {
             entries,
             vec![(5, 2, -2, SubChunkResult::Success, sub_bytes.len())]
         );
+    }
+
+    #[test]
+    fn sub_chunk_request_encoding_1001() {
+        let mut out = Vec::new();
+        encode_sub_chunk_request_for(&mut out, 1001, 0, [0, 4, 0], &[[1, 4, 0], [0, 3, -1]]);
+        let pkt = iter_packets(&out).next().unwrap().unwrap();
+        let mut r = WireReader::new(pkt.payload);
+        assert_eq!(r.var_i32().unwrap(), 0);
+        assert_eq!(r.var_u32().unwrap(), 2);
+        assert_eq!(r.bytes(6, "offsets").unwrap(), &[1, 0, 0, 0, 0xff, 0xff]);
+        assert_eq!(r.i32_le().unwrap(), 0);
+        assert_eq!(r.i32_le().unwrap(), 4);
+        assert_eq!(r.i32_le().unwrap(), 0);
+        assert_eq!(r.remaining(), 0);
     }
 
     #[test]

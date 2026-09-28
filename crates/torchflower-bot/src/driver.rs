@@ -6,9 +6,8 @@ use std::time::Duration;
 
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio::time::MissedTickBehavior;
-use torchflower_engine::bedrock::protocol_adapter::observe_start_game;
 use torchflower_inventory::{
-    decode_container_close, decode_inventory_content, decode_inventory_slot,
+    decode_container_close, decode_inventory_content_for, decode_inventory_slot_for,
     decode_item_stack_response, swap_slots, ContainerOpen, Hand, Inventory, ItemRegistry,
     RecipeBook, RequestIds, StackRequest, StackResponse, Window, OFFHAND_SLOT,
 };
@@ -24,7 +23,7 @@ use torchflower_protocol::{
     ResourcePackClientResponsePacket, SetLocalPlayerAsInitializedPacket,
 };
 use torchflower_protocol_core::wire::{iter_packets, WireReader};
-use torchflower_world::chunk::{decode_sub_chunk_packet, encode_sub_chunk_request};
+use torchflower_world::chunk::{decode_sub_chunk_packet, encode_sub_chunk_request_for};
 use torchflower_world::{
     BlockFlags, BlockPos, DigContext, LevelChunk, RuntimeIdMode, SparseWorld, SubChunk,
     SubChunkResult,
@@ -53,6 +52,7 @@ pub(crate) enum Command {
     SetControls(Controls),
     Dig {
         pos: BlockPos,
+        collect_drops: bool,
         reply: Reply<()>,
     },
     StopDig,
@@ -88,6 +88,22 @@ pub(crate) enum Command {
     StopNavigation,
     Attack(u64, Reply<()>),
     Respawn(Reply<()>),
+    /// Answer a modal form: `Some(json)` responds, `None` closes it.
+    FormResponse {
+        form_id: u32,
+        response: Option<String>,
+        reply: Reply<()>,
+    },
+    /// Eat the best food in the inventory (`None` = any configured food).
+    Eat {
+        network_id: Option<i32>,
+        reply: Reply<i32>,
+    },
+    /// Walk over nearby dropped items.
+    CollectDrops {
+        max_distance: f32,
+        reply: Reply<u32>,
+    },
     Disconnect,
 }
 
@@ -114,6 +130,8 @@ fn reply<T>(r: Option<Reply<T>>, v: BotResult<T>) {
 
 struct DigTask {
     pos: BlockPos,
+    /// Pick up the drop after the block breaks.
+    collect_drops: bool,
     face: i32,
     started: bool,
     elapsed: u32,
@@ -129,7 +147,22 @@ struct PlaceTask {
     reply: Option<Reply<()>>,
 }
 
+/// Who asked for the current route.
+///
+/// Drop collection walks the bot around using the same navigation slot as
+/// [`Bot::goto`](crate::Bot::goto). Tagging the task lets collection cancel
+/// and replace *its own* route without ever silently dropping a route the
+/// user is waiting on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum NavOwner {
+    /// Requested through a public navigation API.
+    User,
+    /// Created internally to step onto a dropped item.
+    Collect,
+}
+
 struct NavTask {
+    owner: NavOwner,
     goal: Box<dyn Goal + Send>,
     follow: Option<(u64, f32)>,
     follow_anchor: Option<Vec3>,
@@ -137,6 +170,42 @@ struct NavTask {
     needs_plan: bool,
     replans: u32,
     reply: Option<Reply<()>>,
+}
+
+/// Eating state machine: select food → hold "use item" for `eat_ticks` →
+/// consume → restore the previous hotbar slot.
+struct EatTask {
+    /// Network id of the food being eaten.
+    item: i32,
+    /// Hotbar slot to restore afterwards.
+    previous_slot: u8,
+    /// Ticks the item has been in use; `None` until use starts.
+    used_for: Option<u32>,
+    /// Tick at which the consume transaction was sent.
+    consumed_at: Option<u64>,
+    /// Food level when eating started (to detect success).
+    food_before: f32,
+    reply: Option<Reply<i32>>,
+}
+
+/// Drop collection: visits dropped items nearest-first.
+struct CollectTask {
+    max_distance: f64,
+    /// Set when the run follows a dig: the broken block and the tick it
+    /// broke at. While present the run waits for the drop to spawn and then
+    /// fills `targets` from the entities around that block.
+    origin: Option<(BlockPos, u64)>,
+    /// Items still to visit.
+    targets: Vec<u64>,
+    /// Item being walked to and when that started.
+    current: Option<(u64, u64)>,
+    /// Tick at which the bot reached the current item.
+    arrived_at: Option<u64>,
+    collected: u32,
+    started: u64,
+    /// Give up (reporting what was collected) after this tick.
+    deadline: u64,
+    reply: Option<Reply<u32>>,
 }
 
 struct WindowWait {
@@ -152,6 +221,45 @@ enum Deferred {
     Latency(i64),
     Stop(String),
 }
+
+/// Unanswered forms kept per bot; older ones are cancelled as "busy".
+const MAX_OPEN_FORMS: usize = 4;
+/// Largest form JSON kept (bytes); longer payloads are truncated.
+const MAX_FORM_JSON: usize = 64 * 1024;
+
+fn floor_char_boundary(s: &str, mut i: usize) -> usize {
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+/// A correction that puts the bot further than this (blocks) from its
+/// current path triggers a re-plan instead of continuing the path.
+const CORRECTION_REPLAN_DISTANCE: f64 = 2.5;
+
+/// Foods that can be eaten with a full hunger bar.
+const ALWAYS_EDIBLE: &[&str] = &[
+    "minecraft:golden_apple",
+    "minecraft:enchanted_golden_apple",
+    "minecraft:chorus_fruit",
+    "minecraft:honey_bottle",
+    "minecraft:milk_bucket",
+    "minecraft:potion",
+    "minecraft:suspicious_stew",
+];
+
+/// Radius (blocks) around a broken block searched for its drop.
+const DIG_COLLECT_RADIUS: f64 = 4.0;
+/// Ticks to wait for a drop to appear after a block breaks.
+const DROP_SPAWN_WAIT_TICKS: u64 = 10;
+/// Ticks spent trying to reach and pick up one item before skipping it.
+const COLLECT_TICKS_PER_ITEM: u64 = 100;
+/// Ticks to stand on an item waiting for the server to hand it over
+/// (vanilla pickup delay is 10 ticks for broken blocks, 40 for thrown items).
+const PICKUP_WAIT_TICKS: u64 = 45;
+/// Extra ticks granted to a collect run on top of the per-item budget.
+const COLLECT_DEADLINE_SLACK_TICKS: u64 = 100;
 
 const SCAFFOLD_ITEMS: &[&str] = &[
     "minecraft:dirt",
@@ -182,6 +290,12 @@ pub(crate) struct Driver<T: Transport> {
     nav: Option<NavTask>,
     window_wait: Option<WindowWait>,
     pending_stack: Vec<(i32, u64, Reply<StackResponse>)>,
+    eat: Option<EatTask>,
+    collect: Option<CollectTask>,
+    /// Earliest tick at which auto-eat may try again (after a failure).
+    auto_eat_not_before: u64,
+    /// Whether the `StartGame` tail matched the negotiated protocol.
+    start_game_parsed: bool,
     protocol: i32,
     last_delta: Vec3,
 }
@@ -211,9 +325,41 @@ impl<T: Transport> Driver<T> {
             nav: None,
             window_wait: None,
             pending_stack: Vec::new(),
+            eat: None,
+            collect: None,
+            auto_eat_not_before: 0,
+            start_game_parsed: false,
             protocol,
             last_delta: Vec3::ZERO,
         }
+    }
+
+    /// Replaces the world with one using `mode` for block runtime ids.
+    fn set_registry(&mut self, st: &mut BotState, mode: RuntimeIdMode) {
+        let registry = shared_registry(
+            self.shared.config.canonical_block_states.as_ref(),
+            self.protocol,
+            mode,
+        );
+        st.world = SparseWorld::new(registry, self.shared.config.window);
+    }
+
+    /// If the ids in received chunks cannot be palette indices, the mode from
+    /// `StartGame` was wrong (or its tail did not parse): switch to hashed ids
+    /// and drop the chunks decoded so far.
+    fn verify_runtime_id_mode(&mut self, st: &mut BotState) {
+        if !st.world.runtime_ids_look_hashed() {
+            return;
+        }
+        let dimension = st.world.dimension();
+        self.set_registry(st, RuntimeIdMode::Hashed);
+        st.world.set_dimension(dimension);
+        st.world.set_center(st.player.block_pos());
+        self.emit(BotEvent::HandlerError(format!(
+            "block runtime ids are hashed, not palette indices (StartGame tail parsed: {}); \
+             re-reading chunks",
+            self.start_game_parsed
+        )));
     }
 
     fn emit(&self, ev: BotEvent) {
@@ -264,6 +410,12 @@ impl<T: Transport> Driver<T> {
         for (_, _, r) in self.pending_stack.drain(..) {
             let _ = r.send(Err(BotError::Disconnected));
         }
+        if let Some(e) = self.eat.take() {
+            reply(e.reply, Err(BotError::Disconnected));
+        }
+        if let Some(c) = self.collect.take() {
+            reply(c.reply, Err(BotError::Disconnected));
+        }
         self.rx.close();
         while let Ok(cmd) = self.rx.try_recv() {
             fail_command(cmd);
@@ -301,9 +453,14 @@ impl<T: Transport> Driver<T> {
     fn tick_spawned(&mut self, st: &mut BotState) {
         self.actions.clear();
         let mut controls = self.manual;
+        self.maybe_auto_eat(st);
+        let eating = self.update_eat(st);
         let digging = self.update_dig(st);
-        self.update_nav(st, &mut controls);
-        if digging && self.nav.is_none() {
+        self.update_collect(st);
+        if !eating {
+            self.update_nav(st, &mut controls);
+        }
+        if (digging && self.nav.is_none()) || eating {
             controls = Controls::default();
         }
         let before = st.player.pos;
@@ -324,7 +481,13 @@ impl<T: Transport> Driver<T> {
             if !reqs.is_empty() {
                 let (cx, cz) = feet.chunk();
                 let base = [cx, feet.y >> 4, cz];
-                encode_sub_chunk_request(&mut self.out, st.world.dimension(), base, &reqs);
+                encode_sub_chunk_request_for(
+                    &mut self.out,
+                    self.protocol,
+                    st.world.dimension(),
+                    base,
+                    &reqs,
+                );
             }
         }
 
@@ -401,7 +564,7 @@ impl<T: Transport> Driver<T> {
     // ------------------------------------------------------------------
 
     fn swing(&mut self, st: &BotState) {
-        proto::encode_swing(&mut self.out, st.runtime_id);
+        proto::encode_swing(&mut self.out, self.protocol, st.runtime_id);
     }
 
     /// Returns true while a dig is in progress.
@@ -462,6 +625,7 @@ impl<T: Transport> Driver<T> {
             if !st.server_authoritative_breaking {
                 proto::encode_player_action(
                     &mut self.out,
+                    self.protocol,
                     st.runtime_id,
                     block_action::START_BREAK,
                     d.pos.to_array(),
@@ -490,6 +654,7 @@ impl<T: Transport> Driver<T> {
                 if !st.server_authoritative_breaking {
                     proto::encode_player_action(
                         &mut self.out,
+                        self.protocol,
                         st.runtime_id,
                         block_action::STOP_BREAK,
                         d.pos.to_array(),
@@ -499,6 +664,7 @@ impl<T: Transport> Driver<T> {
                     let rid = st.world.runtime_id(d.pos).unwrap_or(0);
                     proto::encode_use_item(
                         &mut self.out,
+                        self.protocol,
                         &UseItem {
                             action: 2,
                             block_pos: d.pos.to_array(),
@@ -532,14 +698,21 @@ impl<T: Transport> Driver<T> {
                 .world
                 .block_at(d.pos)
                 .is_none_or(|b| b.is_air() || b.runtime_id() != d.original);
-            reply(
-                d.reply,
-                if broken {
-                    Ok(())
-                } else {
-                    Err(BotError::Rejected("block break not confirmed".into()))
-                },
-            );
+            if !broken {
+                reply(
+                    d.reply,
+                    Err(BotError::Rejected("block break not confirmed".into())),
+                );
+                return false;
+            }
+            // Broken without an `UpdateBlock` to confirm it (the server
+            // accepted the client's prediction silently). This is a normal
+            // completion, so an auto-collect still has to run.
+            if d.collect_drops {
+                self.queue_drop_collection(d.pos, d.reply);
+            } else {
+                reply(d.reply, Ok(()));
+            }
             return false;
         }
         self.dig = Some(d);
@@ -563,7 +736,355 @@ impl<T: Transport> Driver<T> {
         };
         st.inventory.set_selected_hotbar(target);
         let item = st.inventory.get(target).cloned().unwrap_or_default();
-        proto::encode_mob_equipment(&mut self.out, st.runtime_id, &item, target);
+        proto::encode_mob_equipment(&mut self.out, self.protocol, st.runtime_id, &item, target);
+    }
+
+    // ------------------------------------------------------------------
+    // Eating
+    // ------------------------------------------------------------------
+
+    /// Best food in the inventory: `(slot, network_id)`, following the
+    /// configured preference order. `only` restricts it to one item.
+    fn find_food(&self, st: &BotState, only: Option<i32>) -> Option<(u8, i32)> {
+        if let Some(id) = only {
+            return st.inventory.find(id).map(|slot| (slot, id));
+        }
+        self.shared
+            .config
+            .eat
+            .foods
+            .iter()
+            .filter_map(|name| st.items.id(name))
+            .find_map(|id| st.inventory.find(id).map(|slot| (slot, id)))
+    }
+
+    /// Starts eating. With no suitable food, replies `ItemNotFound`.
+    fn start_eat(&mut self, st: &mut BotState, only: Option<i32>, r: Option<Reply<i32>>) {
+        let Some((slot, item)) = self.find_food(st, only) else {
+            reply(r, Err(BotError::ItemNotFound("food".into())));
+            return;
+        };
+        // Servers refuse normal food when the hunger bar is full; only a few
+        // items can always be eaten.
+        let always = st
+            .items
+            .name(item)
+            .is_some_and(|n| ALWAYS_EDIBLE.contains(&n));
+        if st.food >= 20.0 && !always && st.game_mode != 1 {
+            reply(r, Err(BotError::Other("not hungry (food is full)".into())));
+            return;
+        }
+        let previous_slot = st.inventory.selected_hotbar();
+        self.hold_slot(st, slot);
+        self.eat = Some(EatTask {
+            item,
+            previous_slot,
+            used_for: None,
+            consumed_at: None,
+            food_before: st.food,
+            reply: r,
+        });
+    }
+
+    fn click_air(&mut self, st: &BotState) {
+        let cfg = self.physics.cfg;
+        let eye = st.player.eye(&cfg);
+        let held = st.inventory.held().cloned().unwrap_or_default();
+        proto::encode_use_item(
+            &mut self.out,
+            self.protocol,
+            &UseItem {
+                action: proto::use_item_action::CLICK_AIR,
+                block_pos: [0, 0, 0],
+                face: 255,
+                hotbar_slot: st.inventory.selected_hotbar() as i32,
+                held: &held,
+                player_pos: eye.to_f32(),
+                click_pos: [0.0; 3],
+                block_runtime_id: 0,
+            },
+        );
+    }
+
+    /// Returns true while eating (movement is paused).
+    fn update_eat(&mut self, st: &mut BotState) -> bool {
+        let Some(mut e) = self.eat.take() else {
+            return false;
+        };
+        let eat_ticks = self.shared.config.eat.eat_ticks.max(1);
+        // Food must still be in hand (it may have been moved or used up).
+        let holding = st.inventory.held().is_some_and(|h| h.network_id == e.item);
+        match (e.used_for, e.consumed_at) {
+            (None, _) => {
+                if !holding {
+                    self.finish_eat(st, e, Err(BotError::ItemNotFound("food".into())));
+                    return false;
+                }
+                // Tick 0: start using the item.
+                self.click_air(st);
+                self.extra_flags |= input_flags::START_USING_ITEM;
+                e.used_for = Some(0);
+            }
+            (Some(n), None) => {
+                if !holding {
+                    self.finish_eat(st, e, Err(BotError::Cancelled));
+                    return false;
+                }
+                let n = n + 1;
+                e.used_for = Some(n);
+                if n >= eat_ticks {
+                    // Second click-air consumes (vanilla client behaviour,
+                    // accepted by BDS, PocketMine and Dragonfly); the consume
+                    // release is ignored for food by those servers.
+                    self.click_air(st);
+                    let cfg = self.physics.cfg;
+                    let eye = st.player.eye(&cfg);
+                    let held = st.inventory.held().cloned().unwrap_or_default();
+                    proto::encode_release_item(
+                        &mut self.out,
+                        self.protocol,
+                        proto::release_item_action::CONSUME,
+                        st.inventory.selected_hotbar() as i32,
+                        &held,
+                        eye.to_f32(),
+                    );
+                    e.consumed_at = Some(self.tick);
+                }
+            }
+            (Some(_), Some(at)) => {
+                // Waiting for the server to confirm (ActorEvent / hunger).
+                if st.food > e.food_before {
+                    let item = e.item;
+                    self.finish_eat(st, e, Ok(item));
+                    return false;
+                }
+                if self.tick.saturating_sub(at) > 40 {
+                    self.finish_eat(
+                        st,
+                        e,
+                        Err(BotError::Rejected("food was not consumed".into())),
+                    );
+                    return false;
+                }
+            }
+        }
+        self.eat = Some(e);
+        true
+    }
+
+    fn finish_eat(&mut self, st: &mut BotState, e: EatTask, result: BotResult<i32>) {
+        if result.is_err() && e.reply.is_none() {
+            // Auto-eat failed: back off before trying again.
+            self.auto_eat_not_before = self.tick + 200;
+        }
+        if st.inventory.selected_hotbar() != e.previous_slot {
+            self.hold_slot(st, e.previous_slot);
+        }
+        if let Ok(item) = result {
+            self.emit(BotEvent::Ate { item });
+        }
+        reply(e.reply, result);
+    }
+
+    /// Starts an automatic eat when thresholds are crossed.
+    fn maybe_auto_eat(&mut self, st: &mut BotState) {
+        let cfg = &self.shared.config;
+        if !cfg.auto_eat
+            || self.eat.is_some()
+            || self.dig.is_some()
+            || self.place.is_some()
+            || self.tick < self.auto_eat_not_before
+            || st.game_mode == 1
+        {
+            return;
+        }
+        let hungry = st.food <= cfg.eat.food_at_or_below;
+        let hurt = st.health < cfg.eat.health_below && st.food < 20.0;
+        // Eating stops movement for ~1.6 s: only start on solid ground, and
+        // not mid-route unless it is urgent (low health or very hungry).
+        let urgent = st.health <= 8.0 || st.food <= 6.0;
+        let safe = st.player.on_ground && !st.player.in_water && !st.player.in_lava;
+        if !safe || (self.nav.is_some() && !urgent) {
+            return;
+        }
+        if hungry || hurt {
+            if self.find_food(st, None).is_some() {
+                self.start_eat(st, None, None);
+            } else {
+                self.auto_eat_not_before = self.tick + 200;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Drop collection
+    // ------------------------------------------------------------------
+
+    /// After a successful dig: wait for the drop to spawn, then collect
+    /// drops near the broken block and reply to the dig.
+    fn queue_drop_collection(&mut self, pos: BlockPos, dig_reply: Option<Reply<()>>) {
+        self.abort_collect();
+        let (tx, rx) = tokio::sync::oneshot::channel::<BotResult<u32>>();
+        self.collect = Some(CollectTask {
+            max_distance: DIG_COLLECT_RADIUS,
+            origin: Some((pos, self.tick)),
+            targets: Vec::new(),
+            current: None,
+            arrived_at: None,
+            collected: 0,
+            started: self.tick,
+            // Replaced once the drop-spawn wait ends.
+            deadline: u64::MAX,
+            reply: Some(tx),
+        });
+        if let Some(r) = dig_reply {
+            tokio::spawn(async move {
+                // The block is broken either way; drop pickup is best effort.
+                let _ = rx.await;
+                let _ = r.send(Ok(()));
+            });
+        }
+    }
+
+    /// Walks over queued drops. Returns true while collecting.
+    fn update_collect(&mut self, st: &mut BotState) -> bool {
+        let Some(mut c) = self.collect.take() else {
+            return false;
+        };
+        let now = self.tick;
+        if let Some((origin, broke_at)) = c.origin {
+            if now.saturating_sub(broke_at) < DROP_SPAWN_WAIT_TICKS {
+                self.collect = Some(c);
+                return true;
+            }
+            c.origin = None;
+            let o = origin.center();
+            c.targets = st
+                .entities
+                .drops_near(Vec3::new(o[0], o[1], o[2]), c.max_distance)
+                .into_iter()
+                .map(|d| d.0)
+                .collect();
+            c.started = now;
+            c.deadline = self.collect_deadline(c.targets.len());
+        }
+        if now > c.deadline {
+            self.finish_collect(c);
+            return false;
+        }
+        if let Some((target, since)) = c.current {
+            let target_pos = st.entities.get(target).map(|e| e.position);
+            match target_pos {
+                None => {
+                    // Gone: picked up (counted when `TakeItemActor` named
+                    // this bot as the taker) or despawned. Either way stop
+                    // walking towards it.
+                    c.current = None;
+                    c.arrived_at = None;
+                    self.clear_collect_nav();
+                }
+                Some(pos) => {
+                    // Vanilla pickup: the item touches the player's hitbox
+                    // grown by 1 block horizontally / 0.5 vertically.
+                    let d = pos - st.player.pos;
+                    let close = d.horizontal_length() < 0.8 && d.y > -0.6 && d.y < 1.9;
+                    if close && c.arrived_at.is_none() {
+                        c.arrived_at = Some(now);
+                    }
+                    let waited_on_item = c
+                        .arrived_at
+                        .is_some_and(|t| now.saturating_sub(t) > PICKUP_WAIT_TICKS);
+                    let too_long = now.saturating_sub(since) > COLLECT_TICKS_PER_ITEM;
+                    let gave_up = !self.has_collect_nav() && !close;
+                    if waited_on_item || too_long || gave_up {
+                        // Could not pick it up (full inventory, pickup
+                        // delay, unreachable): skip it.
+                        c.current = None;
+                        c.arrived_at = None;
+                        self.clear_collect_nav();
+                    }
+                }
+            }
+        }
+        if c.current.is_none() {
+            let center = st.player.pos;
+            let limit = c.max_distance + 4.0;
+            c.targets.retain(|id| {
+                st.entities
+                    .get(*id)
+                    .is_some_and(|e| e.position.distance(center) <= limit)
+            });
+            if c.targets.is_empty() {
+                self.finish_collect(c);
+                return false;
+            }
+            let next = c.targets.remove(0);
+            let pos = st.entities.get(next).map(|e| e.position).unwrap_or(center);
+            // Take over the route. Starting a user route aborts the run, so
+            // there should be nothing to answer here, but answer it rather
+            // than drop a reply if that ever changes.
+            if let Some(old) = self.nav.take() {
+                reply(old.reply, Err(BotError::Cancelled));
+            }
+            // Walk onto the item: its own block, or the block above if the
+            // item rests on a partial block (slab, carpet) occupying it.
+            let mut feet = BlockPos::from_f64(pos.x, pos.y + 0.05, pos.z);
+            if st.world.shape_at(feet).is_some_and(|s| !s.is_empty()) {
+                feet = feet.offset(0, 1, 0);
+            }
+            self.nav = Some(NavTask {
+                owner: NavOwner::Collect,
+                goal: Box::new(GoalNear::new(feet, 0)),
+                follow: None,
+                follow_anchor: None,
+                follower: PathFollower::default(),
+                needs_plan: true,
+                replans: 0,
+                reply: None,
+            });
+            c.current = Some((next, now));
+        }
+        self.collect = Some(c);
+        true
+    }
+
+    /// Deadline for a collect run: a per-item walking budget plus slack,
+    /// saturating so a long-lived bot can never overflow the tick counter.
+    fn collect_deadline(&self, items: usize) -> u64 {
+        self.tick.saturating_add(
+            COLLECT_TICKS_PER_ITEM
+                .saturating_mul(items.max(1) as u64)
+                .saturating_add(COLLECT_DEADLINE_SLACK_TICKS),
+        )
+    }
+
+    /// True while the active route belongs to drop collection.
+    fn has_collect_nav(&self) -> bool {
+        self.nav
+            .as_ref()
+            .is_some_and(|n| n.owner == NavOwner::Collect)
+    }
+
+    /// Drops the route created by drop collection, leaving a user route
+    /// (and its pending reply) untouched.
+    fn clear_collect_nav(&mut self) {
+        if self.has_collect_nav() {
+            self.nav = None;
+        }
+    }
+
+    fn finish_collect(&mut self, c: CollectTask) {
+        self.clear_collect_nav();
+        reply(c.reply, Ok(c.collected));
+    }
+
+    /// Abandons an in-flight collect run, reporting what it managed to pick
+    /// up. Used when the user takes over navigation or the bot dies.
+    fn abort_collect(&mut self) {
+        if let Some(c) = self.collect.take() {
+            self.clear_collect_nav();
+            reply(c.reply, Ok(c.collected));
+        }
     }
 
     // ------------------------------------------------------------------
@@ -656,6 +1177,7 @@ impl<T: Transport> Driver<T> {
         ];
         proto::encode_use_item(
             &mut self.out,
+            self.protocol,
             &UseItem {
                 action: 0,
                 block_pos: against.to_array(),
@@ -780,6 +1302,7 @@ impl<T: Transport> Driver<T> {
             Some(FollowAction::Dig(pos)) => {
                 self.dig = Some(DigTask {
                     pos,
+                    collect_drops: false,
                     face: 1,
                     started: false,
                     elapsed: 0,
@@ -857,13 +1380,18 @@ impl<T: Transport> Driver<T> {
                 st.player.pitch = pitch.clamp(-90.0, 90.0);
             }
             Command::SetControls(c) => self.manual = c,
-            Command::Dig { pos, reply: r } => {
+            Command::Dig {
+                pos,
+                collect_drops,
+                reply: r,
+            } => {
                 if let Some(old) = self.dig.take() {
                     self.abort_dig(&old);
                     reply(old.reply, Err(BotError::Cancelled));
                 }
                 self.dig = Some(DigTask {
                     pos,
+                    collect_drops,
                     face: 1,
                     started: false,
                     elapsed: 0,
@@ -948,6 +1476,7 @@ impl<T: Transport> Driver<T> {
                 let rid = st.world.runtime_id(pos).unwrap_or(0);
                 proto::encode_use_item(
                     &mut self.out,
+                    self.protocol,
                     &UseItem {
                         action: 0,
                         block_pos: pos.to_array(),
@@ -976,10 +1505,14 @@ impl<T: Transport> Driver<T> {
                 let _ = r.send(Ok(()));
             }
             Command::Navigate { goal, reply: r } => {
+                // A collect run drives navigation itself; taking the route
+                // away from it would leave it walking nowhere.
+                self.abort_collect();
                 if let Some(old) = self.nav.take() {
                     reply(old.reply, Err(BotError::Cancelled));
                 }
                 self.nav = Some(NavTask {
+                    owner: NavOwner::User,
                     goal,
                     follow: None,
                     follow_anchor: None,
@@ -994,14 +1527,16 @@ impl<T: Transport> Driver<T> {
                 range,
                 reply: r,
             } => {
-                if let Some(old) = self.nav.take() {
-                    reply(old.reply, Err(BotError::Cancelled));
-                }
                 let Some(pos) = st.entities.get(runtime_id).map(|e| e.position) else {
                     let _ = r.send(Err(BotError::EntityNotFound));
                     return;
                 };
+                self.abort_collect();
+                if let Some(old) = self.nav.take() {
+                    reply(old.reply, Err(BotError::Cancelled));
+                }
                 self.nav = Some(NavTask {
+                    owner: NavOwner::User,
                     goal: Box::new(GoalNear::new(
                         BlockPos::from_f64(pos.x, pos.y, pos.z),
                         range,
@@ -1015,6 +1550,9 @@ impl<T: Transport> Driver<T> {
                 });
             }
             Command::StopNavigation => {
+                // `stop()` stops *all* driver-owned movement, including a
+                // drop-collection walk.
+                self.abort_collect();
                 if let Some(old) = self.nav.take() {
                     let ok = old.follow.is_some();
                     reply(
@@ -1049,6 +1587,7 @@ impl<T: Transport> Driver<T> {
                 self.swing(&st);
                 proto::encode_use_item_on_entity(
                     &mut self.out,
+                    self.protocol,
                     target,
                     1,
                     st.inventory.selected_hotbar() as i32,
@@ -1058,16 +1597,89 @@ impl<T: Transport> Driver<T> {
                 let _ = r.send(Ok(()));
             }
             Command::Respawn(r) => {
-                Self::encode_respawn(&mut self.out, &st);
+                Self::encode_respawn(&mut self.out, self.protocol, &st);
                 let _ = r.send(Ok(()));
+            }
+            Command::FormResponse {
+                form_id,
+                response,
+                reply: r,
+            } => {
+                let Some(i) = st.open_forms.iter().position(|f| f.0 == form_id) else {
+                    let _ = r.send(Err(BotError::FormNotFound(form_id)));
+                    return;
+                };
+                // `remove`, not `swap_remove`: the queue is ordered oldest
+                // first and eviction depends on that order.
+                st.open_forms.remove(i);
+                match response {
+                    Some(json) => proto::encode_form_response(&mut self.out, form_id, &json),
+                    None => proto::encode_form_cancel(
+                        &mut self.out,
+                        form_id,
+                        proto::FormCancelReason::UserClosed,
+                    ),
+                }
+                let _ = r.send(Ok(()));
+            }
+            Command::Eat {
+                network_id,
+                reply: r,
+            } => {
+                if self.eat.is_some() {
+                    let _ = r.send(Err(BotError::Other("already eating".into())));
+                    return;
+                }
+                self.start_eat(&mut st, network_id, Some(r));
+            }
+            Command::CollectDrops {
+                max_distance,
+                reply: r,
+            } => {
+                self.abort_collect();
+                // Collection drives navigation, so it replaces an active
+                // route the same way a new route would.
+                if let Some(old) = self.nav.take() {
+                    reply(old.reply, Err(BotError::Cancelled));
+                }
+                let center = st.player.pos;
+                let targets: Vec<u64> = st
+                    .entities
+                    .drops_near(center, max_distance as f64)
+                    .into_iter()
+                    .map(|d| d.0)
+                    .collect();
+                if targets.is_empty() {
+                    let _ = r.send(Ok(0));
+                    return;
+                }
+                let deadline = self.collect_deadline(targets.len());
+                self.collect = Some(CollectTask {
+                    max_distance: max_distance as f64,
+                    origin: None,
+                    targets,
+                    current: None,
+                    arrived_at: None,
+                    collected: 0,
+                    started: self.tick,
+                    deadline,
+                    reply: Some(r),
+                });
             }
             Command::Disconnect => {}
         }
     }
 
-    fn encode_respawn(out: &mut Vec<u8>, st: &BotState) {
+    fn encode_respawn(out: &mut Vec<u8>, protocol: i32, st: &BotState) {
         proto::encode_respawn_ready(out, st.runtime_id);
-        proto::encode_player_action(out, st.runtime_id, block_action::RESPAWN, [0, 0, 0], -1);
+        proto::encode_player_action(
+            out,
+            protocol,
+            st.runtime_id,
+            block_action::RESPAWN,
+            [0, 0, 0],
+            -1,
+        );
     }
 
     fn abort_dig(&mut self, d: &DigTask) {
@@ -1082,7 +1694,13 @@ impl<T: Transport> Driver<T> {
 
     fn encode_command(&mut self, command: &str) {
         let uuid = uuid::Uuid::new_v4();
-        proto::encode_command(&mut self.out, command, *uuid.as_bytes(), &uuid.to_string());
+        proto::encode_command(
+            &mut self.out,
+            self.protocol,
+            command,
+            *uuid.as_bytes(),
+            &uuid.to_string(),
+        );
     }
 
     // ------------------------------------------------------------------
@@ -1145,24 +1763,34 @@ impl<T: Transport> Driver<T> {
                     },
                 )]))
             }
-            Inbound::StartGame(info, raw) => {
-                let observed = observe_start_game(raw);
-                let hashed = observed
-                    .as_ref()
-                    .and_then(|o| o.block_network_ids_are_hashes)
-                    .unwrap_or(false);
-                st.server_authoritative_breaking = observed
-                    .as_ref()
-                    .and_then(|o| o.server_authoritative_block_breaking)
-                    .unwrap_or(true);
-                let mode = if hashed {
-                    RuntimeIdMode::Hashed
-                } else {
-                    RuntimeIdMode::Sequential
+            Inbound::StartGame(info) => {
+                // The runtime-id mode decides how every block id is read, so
+                // it is taken from StartGame when the tail parsed and
+                // otherwise assumed hashed (the modern default) and verified
+                // against the first chunks.
+                let mode = match info.policy.as_ref() {
+                    Some(policy) => {
+                        st.server_authoritative_breaking =
+                            policy.server_authoritative_block_breaking;
+                        if policy.block_network_ids_are_hashes {
+                            RuntimeIdMode::Hashed
+                        } else {
+                            RuntimeIdMode::Sequential
+                        }
+                    }
+                    None => RuntimeIdMode::Hashed,
                 };
-                let registry =
-                    shared_registry(self.shared.config.canonical_block_states.as_ref(), mode);
-                st.world = SparseWorld::new(registry, self.shared.config.window);
+                self.start_game_parsed = info.policy.is_some();
+                // Before 1.21.60 the item table is part of StartGame.
+                if let Some(items) = info
+                    .policy
+                    .as_ref()
+                    .filter(|p| !p.items.is_empty())
+                    .map(|p| p.items.iter().map(|(n, id)| (n.to_string(), *id)))
+                {
+                    st.items = Arc::new(ItemRegistry::from_entries(items));
+                }
+                self.set_registry(st, mode);
                 st.world.set_dimension(info.dimension);
                 st.runtime_id = info.runtime_id;
                 st.unique_id = info.unique_id;
@@ -1222,6 +1850,7 @@ impl<T: Transport> Driver<T> {
             Inbound::LevelChunk(payload) => {
                 if let Ok(chunk) = LevelChunk::decode(payload) {
                     let _ = st.world.insert_level_chunk(&chunk);
+                    self.verify_runtime_id_mode(st);
                 }
             }
             Inbound::SubChunk(payload) => {
@@ -1243,6 +1872,7 @@ impl<T: Transport> Driver<T> {
                         _ => st.world.mark_sub_chunk_unavailable(cx, e.y, cz),
                     }
                 }
+                self.verify_runtime_id_mode(st);
             }
             Inbound::UpdateBlock {
                 pos,
@@ -1267,7 +1897,7 @@ impl<T: Transport> Driver<T> {
                 }
             }
             Inbound::InventoryContent(p) => {
-                if let Ok((window, items)) = decode_inventory_content(p) {
+                if let Ok((window, items)) = decode_inventory_content_for(p, self.protocol) {
                     st.inventory.apply_content(window, items);
                     if let Some(w) = self.window_wait.as_mut() {
                         if st
@@ -1281,12 +1911,12 @@ impl<T: Transport> Driver<T> {
                 }
             }
             Inbound::InventorySlot(p) => {
-                if let Ok((window, slot, item)) = decode_inventory_slot(p) {
+                if let Ok((window, slot, item)) = decode_inventory_slot_for(p, self.protocol) {
                     st.inventory.apply_slot(window, slot, item);
                 }
             }
             Inbound::ContainerOpen(p) => {
-                if let Ok(open) = ContainerOpen::decode(p) {
+                if let Ok(open) = ContainerOpen::decode_for(p, self.protocol) {
                     let id = open.window_id;
                     st.inventory.apply_container_open(open);
                     if let Some(w) = self.window_wait.as_mut() {
@@ -1369,7 +1999,17 @@ impl<T: Transport> Driver<T> {
                     self.emit(BotEvent::EntityRemoved(e.runtime_id));
                 }
             }
-            Inbound::TakeItemActor { item, .. } => {
+            Inbound::TakeItemActor { item, taker } => {
+                // Only a pickup by *this* bot counts towards a collect run;
+                // another player or a mob taking the item is just a removal.
+                if taker == st.runtime_id {
+                    if let Some(c) = self.collect.as_mut() {
+                        if c.current.is_some_and(|(id, _)| id == item) || c.targets.contains(&item)
+                        {
+                            c.collected = c.collected.saturating_add(1);
+                        }
+                    }
+                }
                 if st.entities.remove_runtime(item).is_some() {
                     self.emit(BotEvent::EntityRemoved(item));
                 }
@@ -1405,37 +2045,50 @@ impl<T: Transport> Driver<T> {
                     e.on_ground = on_ground;
                 }
             }
-            Inbound::MovePlayer {
-                runtime_id,
-                position,
-                pitch,
-                yaw,
-                on_ground,
-                ..
-            } => {
-                let feet = Vec3::from_f32(position) - eye_off;
-                if runtime_id == st.runtime_id {
-                    st.player.apply_correction(feet, None, on_ground);
-                    st.player.yaw = yaw;
-                    st.player.pitch = pitch;
-                    st.world.set_center(st.player.block_pos());
+            Inbound::MovePlayer(m) => {
+                let feet = Vec3::from_f32(m.position) - eye_off;
+                if m.runtime_id == st.runtime_id && m.mode == proto::move_mode::ROTATION {
+                    // Rotation-only update: keep position and velocity.
+                    st.player.yaw = m.yaw;
+                    st.player.pitch = m.pitch;
+                } else if m.runtime_id == st.runtime_id {
+                    // Teleport / reset from the server: snap, drop velocity
+                    // and acknowledge on the next input. A teleport is
+                    // unconditional, so it is applied without consulting the
+                    // packet's tick field.
+                    self.apply_server_position(st, feet, None, m.on_ground);
+                    st.player.yaw = m.yaw;
+                    st.player.pitch = m.pitch;
                     self.extra_flags |= input_flags::HANDLED_TELEPORT;
                     self.emit(BotEvent::Teleported(feet));
-                } else if let Some(e) = st.entities.get_mut(runtime_id) {
+                } else if let Some(e) = st.entities.get_mut(m.runtime_id) {
                     e.position = feet;
-                    e.yaw = yaw;
-                    e.pitch = pitch;
-                    e.on_ground = on_ground;
+                    e.yaw = m.yaw;
+                    e.pitch = m.pitch;
+                    e.on_ground = m.on_ground;
                 }
             }
-            Inbound::CorrectMove {
-                position,
-                delta,
-                on_ground,
-            } => {
-                let feet = Vec3::from_f32(position) - eye_off;
-                st.player
-                    .apply_correction(feet, Some(Vec3::from_f32(delta)), on_ground);
+            Inbound::CorrectMove(c) => {
+                if c.prediction_type != proto::prediction_type::PLAYER {
+                    return; // vehicle predictions are not simulated
+                }
+                if c.tick > self.tick {
+                    // The tick is the bot's own input tick echoed back, so a
+                    // tick it has not sent yet cannot be answering it.
+                    return;
+                }
+                let feet = Vec3::from_f32(c.position) - eye_off;
+                let velocity = Vec3::from_f32(c.velocity);
+                st.corrections += 1;
+                self.apply_server_position(st, feet, Some(velocity), c.on_ground);
+                if let Some([pitch, yaw]) = c.rotation {
+                    st.player.pitch = pitch;
+                    st.player.yaw = yaw;
+                }
+                self.emit(BotEvent::MovementCorrected {
+                    position: feet,
+                    tick: c.tick,
+                });
             }
             Inbound::SetActorMotion {
                 runtime_id,
@@ -1443,7 +2096,9 @@ impl<T: Transport> Driver<T> {
             } => {
                 let v = Vec3::from_f32(velocity);
                 if runtime_id == st.runtime_id {
-                    st.player.vel = v;
+                    // Clamped: the value is simulated, and an absurd one would
+                    // make the collision sweep enumerate a huge region.
+                    st.player.set_velocity(v);
                 } else if let Some(e) = st.entities.get_mut(runtime_id) {
                     e.velocity = v;
                 }
@@ -1477,8 +2132,7 @@ impl<T: Transport> Driver<T> {
             } => {
                 if state == 1 {
                     let feet = Vec3::from_f32(position) - eye_off;
-                    st.player.apply_correction(feet, None, false);
-                    st.world.set_center(st.player.block_pos());
+                    self.apply_server_position(st, feet, None, false);
                     if st.dead {
                         st.dead = false;
                         st.health = 20.0;
@@ -1492,14 +2146,17 @@ impl<T: Transport> Driver<T> {
             } => {
                 st.world.set_dimension(dimension);
                 let feet = Vec3::from_f32(position) - eye_off;
-                st.player.apply_correction(feet, None, false);
-                st.world.set_center(st.player.block_pos());
+                self.apply_server_position(st, feet, None, false);
+                // Every entity from the old dimension is gone; a collect run
+                // chasing one of them can never finish.
+                self.abort_collect();
                 st.entities = crate::entity::EntityTable::new(
                     self.shared.config.entity_capacity,
                     self.shared.config.entity_radius,
                 );
                 proto::encode_player_action(
                     &mut self.out,
+                    self.protocol,
                     st.runtime_id,
                     block_action::DIMENSION_CHANGE_DONE,
                     [0, 0, 0],
@@ -1530,6 +2187,56 @@ impl<T: Transport> Driver<T> {
                     st.inventory.set_selected_hotbar(slot as u8);
                 }
             }
+            Inbound::ModalForm { form_id, data } => {
+                let data = if data.len() > MAX_FORM_JSON {
+                    &data[..floor_char_boundary(data, MAX_FORM_JSON)]
+                } else {
+                    data
+                };
+                // Re-sending a form id replaces the stored copy, so drop it
+                // before measuring the queue: a replacement must not evict an
+                // unrelated form.
+                st.open_forms.retain(|f| f.0 != form_id);
+                // Keep a bounded number of unanswered forms per bot. The queue
+                // is kept in arrival order, so index 0 is the oldest.
+                while st.open_forms.len() >= MAX_OPEN_FORMS {
+                    let (old, _) = st.open_forms.remove(0);
+                    proto::encode_form_cancel(
+                        &mut self.out,
+                        old,
+                        proto::FormCancelReason::UserBusy,
+                    );
+                }
+                st.open_forms.push((form_id, data.to_string()));
+                self.emit(BotEvent::FormRequest {
+                    form_id,
+                    data: data.to_string(),
+                });
+            }
+            Inbound::CloseForm => {
+                st.open_forms.clear();
+                self.emit(BotEvent::FormsClosed);
+            }
+            Inbound::ActorEvent {
+                runtime_id,
+                event,
+                data,
+            } => {
+                // `Feed` is broadcast while eating. After the consume was
+                // sent, the server's eating event for our food confirms the
+                // bite even if the hunger bar was already full enough that
+                // it does not visibly rise (e.g. saturation-only foods).
+                if runtime_id == st.runtime_id && event == proto::actor_event::FEED {
+                    if let Some(e) = self.eat.take() {
+                        if e.consumed_at.is_some() && data >> 16 == e.item {
+                            let item = e.item;
+                            self.finish_eat(st, e, Ok(item));
+                        } else {
+                            self.eat = Some(e);
+                        }
+                    }
+                }
+            }
             Inbound::ChunkRadiusUpdated(_) | Inbound::Other(_) => {}
         }
     }
@@ -1551,15 +2258,60 @@ impl<T: Transport> Driver<T> {
         });
         if health <= 0.0 && !st.dead {
             st.dead = true;
+            // Nothing driver-owned survives a death: the server resets the
+            // player, so every in-flight task must be answered now instead
+            // of waiting for a timeout that can never be satisfied.
+            self.abort_collect();
             if let Some(n) = self.nav.take() {
                 reply(n.reply, Err(BotError::Cancelled));
             }
             if let Some(d) = self.dig.take() {
                 reply(d.reply, Err(BotError::Cancelled));
             }
+            if let Some(e) = self.eat.take() {
+                reply(e.reply, Err(BotError::Cancelled));
+            }
+            if let Some(p) = self.place.take() {
+                reply(p.reply, Err(BotError::Cancelled));
+            }
             self.emit(BotEvent::Death);
             if self.shared.config.auto_respawn {
-                Self::encode_respawn(&mut self.out, st);
+                Self::encode_respawn(&mut self.out, self.protocol, st);
+            }
+        }
+    }
+
+    /// Applies an authoritative position from the server (correction,
+    /// teleport, respawn or dimension change).
+    ///
+    /// * snaps the simulated player and replaces its velocity (the server's
+    ///   velocity for corrections, zero otherwise), clearing fall distance;
+    /// * resets the delta sent with the next input so the server does not
+    ///   see a jump from the stale position;
+    /// * tells an active navigation's [`PathFollower`] about the jump so the
+    ///   path is kept (or re-planned) instead of reported as stuck.
+    ///
+    /// Note that the local tick counter is deliberately left alone: the tick
+    /// a correction carries is the bot's *own* input tick echoed back, and the
+    /// counter doubles as the clock every pending task measures its timeout
+    /// against, so it stays a monotonic local clock.
+    fn apply_server_position(
+        &mut self,
+        st: &mut BotState,
+        feet: Vec3,
+        velocity: Option<Vec3>,
+        on_ground: bool,
+    ) {
+        st.player.apply_correction(feet, velocity, on_ground);
+        st.player.jump_cooldown = 0;
+        st.world.set_center(st.player.block_pos());
+        self.last_delta = Vec3::ZERO;
+        if let Some(nav) = self.nav.as_mut() {
+            if !nav
+                .follower
+                .on_position_corrected(feet, CORRECTION_REPLAN_DISTANCE)
+            {
+                nav.needs_plan = true;
             }
         }
     }
@@ -1570,7 +2322,9 @@ impl<T: Transport> Driver<T> {
         if let Some(d) = self.dig.as_ref() {
             if d.pos == pos && d.started {
                 let d = self.dig.take().expect("checked");
-                if air {
+                if air && d.collect_drops {
+                    self.queue_drop_collection(d.pos, d.reply);
+                } else if air {
                     reply(d.reply, Ok(()));
                 } else if d.finished_at.is_some() && runtime_id == d.original {
                     reply(
@@ -1621,6 +2375,15 @@ fn fail_command_with(cmd: Command, e: BotError) {
             let _ = r.send(Err(e));
         }
         Command::OpenContainer { reply: r, .. } => {
+            let _ = r.send(Err(e));
+        }
+        Command::FormResponse { reply: r, .. } => {
+            let _ = r.send(Err(e));
+        }
+        Command::Eat { reply: r, .. } => {
+            let _ = r.send(Err(e));
+        }
+        Command::CollectDrops { reply: r, .. } => {
             let _ = r.send(Err(e));
         }
         Command::Look { .. }

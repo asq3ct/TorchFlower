@@ -6,6 +6,7 @@
 //! Nothing here allocates per tick.
 
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 pub mod input;
 pub mod math;
@@ -14,6 +15,6 @@ pub mod player;
 pub use input::{flags as input_flags, InputSnapshot, InputTracker};
 pub use math::{Aabb, Vec3};
 pub use player::{
-    look_angles, CollisionWorld, Controls, MovementEffects, Physics, PhysicsConfig, PlayerState,
-    TickOutcome,
+    look_angles, sanitize_velocity, CollisionWorld, Controls, MovementEffects, Physics,
+    PhysicsConfig, PlayerState, TickOutcome, MAX_NETWORK_VELOCITY,
 };

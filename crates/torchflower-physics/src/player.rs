@@ -37,27 +37,49 @@ impl CollisionWorld for SparseWorld {
 /// Movement constants.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PhysicsConfig {
+    /// Gravity in blocks/tick² (0.08).
     pub gravity: f64,
+    /// Vertical drag per tick (0.98).
     pub air_drag: f64,
+    /// Horizontal inertia multiplier (0.91).
     pub air_inertia: f64,
+    /// Slipperiness of ordinary blocks (0.6).
     pub default_slipperiness: f64,
+    /// Highest ledge walked up without jumping (0.6).
     pub step_height: f64,
+    /// Hitbox width.
     pub width: f64,
+    /// Hitbox height.
     pub height: f64,
+    /// Hitbox height while sneaking.
     pub sneak_height: f64,
+    /// Eye height above the feet.
     pub eye_height: f64,
+    /// Initial jump velocity.
     pub jump_velocity: f64,
+    /// Forward boost of a sprint jump.
     pub sprint_jump_boost: f64,
+    /// Base movement speed attribute.
     pub walk_speed: f64,
+    /// Speed multiplier while sprinting.
     pub sprint_multiplier: f64,
+    /// Speed multiplier while sneaking.
     pub sneak_multiplier: f64,
+    /// Acceleration in the air.
     pub air_acceleration: f64,
+    /// Acceleration in the air while sprinting.
     pub sprint_air_acceleration: f64,
+    /// Drag in water.
     pub water_drag: f64,
+    /// Gravity in water.
     pub water_gravity: f64,
+    /// Acceleration in liquids.
     pub water_acceleration: f64,
+    /// Drag in lava.
     pub lava_drag: f64,
+    /// Climbing speed on ladders and vines.
     pub climb_speed: f64,
+    /// Ticks between auto-repeated jumps.
     pub jump_cooldown_ticks: u8,
 }
 
@@ -93,12 +115,19 @@ impl Default for PhysicsConfig {
 /// Requested inputs for one tick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Controls {
+    /// Move forward.
     pub forward: bool,
+    /// Move backward.
     pub back: bool,
+    /// Strafe left.
     pub left: bool,
+    /// Strafe right.
     pub right: bool,
+    /// Jump (or swim/climb up).
     pub jump: bool,
+    /// Sprint.
     pub sprint: bool,
+    /// Sneak.
     pub sneak: bool,
 }
 
@@ -114,11 +143,38 @@ impl Controls {
 /// Active status effects relevant for movement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MovementEffects {
+    /// Speed effect level.
     pub speed: u8,
+    /// Slowness effect level.
     pub slowness: u8,
+    /// Jump boost effect level.
     pub jump_boost: u8,
+    /// Slow falling is active.
     pub slow_falling: bool,
+    /// Levitation effect level.
     pub levitation: u8,
+}
+
+/// Largest velocity component (blocks per tick) the simulation accepts from
+/// the network.
+///
+/// A vanilla player never exceeds a few blocks per tick even when launched by
+/// an explosion or a piston. Anything beyond this is a malformed or hostile
+/// packet, and feeding it into the collision sweep would make it enumerate a
+/// region proportional to the value — effectively a hang.
+pub const MAX_NETWORK_VELOCITY: f64 = 10.0;
+
+/// Clamps a velocity received from the network to something the simulation can
+/// step in bounded time, mapping non-finite components to zero.
+pub fn sanitize_velocity(v: Vec3) -> Vec3 {
+    fn axis(c: f64) -> f64 {
+        if c.is_finite() {
+            c.clamp(-MAX_NETWORK_VELOCITY, MAX_NETWORK_VELOCITY)
+        } else {
+            0.0
+        }
+    }
+    Vec3::new(axis(v.x), axis(v.y), axis(v.z))
 }
 
 /// Full per-bot movement state (≈150 bytes, no heap).
@@ -126,22 +182,35 @@ pub struct MovementEffects {
 pub struct PlayerState {
     /// Feet position.
     pub pos: Vec3,
+    /// Velocity in blocks per tick.
     pub vel: Vec3,
     /// Degrees, Bedrock convention (0 = +Z/south, 90 = −X/west).
     pub yaw: f32,
     /// Degrees, positive looks down.
     pub pitch: f32,
+    /// Standing on a block.
     pub on_ground: bool,
+    /// Inside water.
     pub in_water: bool,
+    /// Inside lava.
     pub in_lava: bool,
+    /// On a ladder, vine or scaffolding.
     pub on_climbable: bool,
+    /// Inside a cobweb or other slowing block.
     pub in_cobweb: bool,
+    /// Currently sprinting.
     pub sprinting: bool,
+    /// Currently sneaking.
     pub sneaking: bool,
+    /// Hit a wall during the last tick.
     pub horizontal_collision: bool,
+    /// Hit a floor or ceiling during the last tick.
     pub vertical_collision: bool,
+    /// Distance fallen since last on the ground.
     pub fall_distance: f64,
+    /// Ticks until the next jump is allowed.
     pub jump_cooldown: u8,
+    /// Active movement effects.
     pub effects: MovementEffects,
     /// Movement speed attribute (0.1 base), updated from `UpdateAttributes`.
     pub movement_speed: f64,
@@ -190,11 +259,20 @@ impl PlayerState {
     }
 
     /// Applies a server position correction / teleport.
+    ///
+    /// The velocity is passed through [`sanitize_velocity`], so a malformed
+    /// packet cannot make the next step sweep an unbounded region.
     pub fn apply_correction(&mut self, feet: Vec3, velocity: Option<Vec3>, on_ground: bool) {
         self.pos = feet;
-        self.vel = velocity.unwrap_or(Vec3::ZERO);
+        self.vel = sanitize_velocity(velocity.unwrap_or(Vec3::ZERO));
         self.on_ground = on_ground;
         self.fall_distance = 0.0;
+    }
+
+    /// Replaces the velocity with a server-supplied one, clamped by
+    /// [`sanitize_velocity`].
+    pub fn set_velocity(&mut self, velocity: Vec3) {
+        self.vel = sanitize_velocity(velocity);
     }
 
     /// Block the feet are standing in.
@@ -237,12 +315,14 @@ pub struct TickOutcome {
     pub fall_damage: f32,
     /// Position delta applied this tick.
     pub delta: Vec3,
+    /// Landed on the ground during this tick.
     pub landed: bool,
 }
 
 /// Reusable simulator (owns a scratch collision buffer; no per-tick allocation).
 #[derive(Debug, Clone, Default)]
 pub struct Physics {
+    /// Movement constants.
     pub cfg: PhysicsConfig,
     scratch: Vec<Aabb>,
 }
@@ -853,6 +933,35 @@ mod tests {
             p.tick(&mut s, Controls::default(), &w);
         }
         assert!(s.pos.z - start > 1.5, "slid {}", s.pos.z - start);
+    }
+
+    #[test]
+    fn network_velocity_is_clamped_and_finite() {
+        let v = sanitize_velocity(Vec3::new(1e12, -1e12, 0.25));
+        assert_eq!(v.x, MAX_NETWORK_VELOCITY);
+        assert_eq!(v.y, -MAX_NETWORK_VELOCITY);
+        assert_eq!(v.z, 0.25);
+        let v = sanitize_velocity(Vec3::new(f64::NAN, f64::INFINITY, f64::NEG_INFINITY));
+        assert_eq!(v, Vec3::ZERO);
+    }
+
+    /// A correction carrying an absurd velocity must still step in bounded
+    /// time: the sweep is driven by the clamped value, not the raw one.
+    #[test]
+    fn correction_with_absurd_velocity_steps_in_bounded_time() {
+        let w = TestWorld::flat();
+        let mut p = Physics::default();
+        let mut s = PlayerState::new(Vec3::new(0.5, 65.0, 0.5));
+        s.apply_correction(
+            Vec3::new(0.5, 65.0, 0.5),
+            Some(Vec3::new(f64::MAX, 0.0, 0.0)),
+            true,
+        );
+        assert_eq!(s.vel.x, MAX_NETWORK_VELOCITY);
+        for _ in 0..20 {
+            p.tick(&mut s, Controls::default(), &w);
+        }
+        assert!(s.pos.x.is_finite());
     }
 
     #[test]

@@ -12,8 +12,11 @@ pub enum FollowAction {
     Dig(BlockPos),
     /// Place a block at `pos`, clicking `against` on `face`.
     Place {
+        /// Block position to fill.
         pos: BlockPos,
+        /// Solid block to click.
         against: BlockPos,
+        /// Face of `against` to click.
         face: u8,
     },
 }
@@ -21,7 +24,9 @@ pub enum FollowAction {
 /// Follower state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FollowStatus {
+    /// Following the path.
     Running,
+    /// Every step has been reached.
     Done,
     /// No progress for too long; the caller should re-plan.
     Stuck,
@@ -30,10 +35,13 @@ pub enum FollowStatus {
 /// Output for one tick.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FollowOutput {
+    /// Movement controls for this tick.
     pub controls: Controls,
     /// Desired `(yaw, pitch)`.
     pub look: Option<(f32, f32)>,
+    /// Dig or place the bot must perform first.
     pub action: Option<FollowAction>,
+    /// Follower status.
     pub status: FollowStatus,
 }
 
@@ -68,6 +76,51 @@ impl PathFollower {
     /// True when every step has been reached.
     pub fn is_done(&self) -> bool {
         self.index >= self.steps.len()
+    }
+
+    /// Informs the follower that the server moved the bot (movement
+    /// correction, rubber-band or teleport) to feet position `corrected`.
+    ///
+    /// Stall detection is reset so the jump does not count as lack of
+    /// progress, and the follower re-anchors itself to the step nearest the
+    /// corrected position — skipping ahead if the server pushed the bot
+    /// forward, rewinding if it pulled the bot back down the path it already
+    /// walked (the usual rubber-band). Returns `true` if the path can still be
+    /// followed from there (some step is within `max_offset` blocks); `false`
+    /// means the caller should re-plan.
+    pub fn on_position_corrected(&mut self, corrected: Vec3, max_offset: f64) -> bool {
+        self.stall_ticks = 0;
+        self.best_dist = f64::MAX;
+        if self.is_done() {
+            return true;
+        }
+        // The whole path is searched, not just the remaining steps: a
+        // rubber-band lands on a step the bot has already passed, and rewinding
+        // to it re-walks a valid path instead of throwing it away.
+        let mut nearest: Option<(usize, f64)> = None;
+        for (i, step) in self.steps.iter().enumerate() {
+            let c = Vec3::new(
+                step.pos.x as f64 + 0.5,
+                step.pos.y as f64,
+                step.pos.z as f64 + 0.5,
+            );
+            let d = c.distance(corrected);
+            if nearest.is_none_or(|(_, best)| d < best) {
+                nearest = Some((i, d));
+            }
+        }
+        let Some((i, d)) = nearest else {
+            return true;
+        };
+        if i > self.index {
+            // Only treat the bot as advanced when it really is on that step.
+            if d < 0.5 {
+                self.index = i;
+            }
+        } else if i < self.index && d <= max_offset {
+            self.index = i;
+        }
+        d <= max_offset
     }
 
     /// Computes the controls for the next tick.
@@ -279,6 +332,55 @@ mod tests {
         w.set(BlockPos::new(2, 65, 0), Shape::FULL);
         let s = simulate(&w, BlockPos::new(0, 64, 0), BlockPos::new(8, 64, 3), 400);
         assert_eq!(s.block_pos(), BlockPos::new(8, 64, 3));
+    }
+
+    #[test]
+    fn correction_keeps_path_and_resets_stall_detection() {
+        let w = Grid::flat();
+        let opt = PathOptions {
+            allow_dig: false,
+            ..Default::default()
+        };
+        let r = find_path(
+            &w,
+            BlockPos::new(0, 64, 0),
+            &GoalBlock::new(10, 64, 0),
+            &opt,
+        );
+        let mut f = PathFollower::new(r.steps);
+        f.stall_ticks = 55;
+        // Pulled back half a block: still on the path, nothing skipped.
+        assert!(f.on_position_corrected(Vec3::new(0.3, 64.0, 0.5), 3.0));
+        assert_eq!(f.stall_ticks, 0);
+        assert_eq!(f.remaining().len(), 10);
+        // Pushed forward onto step 5: the follower skips ahead.
+        assert!(f.on_position_corrected(Vec3::new(5.5, 64.0, 0.5), 3.0));
+        assert_eq!(f.remaining().first().unwrap().pos, BlockPos::new(5, 64, 0));
+        // Rubber-banded back onto step 3, which the bot already walked: the
+        // path is still valid, so the follower rewinds instead of giving up.
+        assert!(f.on_position_corrected(Vec3::new(3.5, 64.0, 0.5), 3.0));
+        assert_eq!(f.remaining().first().unwrap().pos, BlockPos::new(3, 64, 0));
+        assert_eq!(f.remaining().len(), 8);
+        // Teleported far away: caller must re-plan.
+        assert!(!f.on_position_corrected(Vec3::new(40.5, 80.0, 40.5), 3.0));
+    }
+
+    /// A correction sideways off a path that turns must not silently re-anchor
+    /// to a step the bot cannot walk to: it is too far, so a re-plan is asked
+    /// for and the follower keeps its position in the path.
+    #[test]
+    fn correction_off_a_turning_path_asks_for_a_replan() {
+        let w = Grid::flat();
+        let opt = PathOptions {
+            allow_dig: false,
+            ..Default::default()
+        };
+        let r = find_path(&w, BlockPos::new(0, 64, 0), &GoalBlock::new(6, 64, 6), &opt);
+        let mut f = PathFollower::new(r.steps);
+        let before = f.remaining().len();
+        assert!(before > 4, "path has some length: {before}");
+        assert!(!f.on_position_corrected(Vec3::new(-20.5, 64.0, 20.5), 2.5));
+        assert_eq!(f.remaining().len(), before, "index untouched on failure");
     }
 
     #[test]

@@ -19,21 +19,32 @@ pub const CRAFTING_DATA_ID: u32 = 0x34;
 /// Recipe ingredient descriptor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Ingredient {
+    /// Empty grid cell.
     Invalid,
     /// Network id + metadata (32767 = any).
     Default {
+        /// Item network id.
         network_id: i16,
+        /// Metadata (32767 = any).
         metadata: i16,
     },
+    /// A Molang expression (not matched by the planner).
     MoLang {
+        /// The expression.
         expression: Box<str>,
+        /// Molang version.
         version: u8,
     },
+    /// Any item with this tag, e.g. `minecraft:planks`.
     Tag(Box<str>),
+    /// An item by name and metadata.
     Deferred {
+        /// Item identifier.
         name: Box<str>,
+        /// Metadata (32767 = any).
         metadata: i16,
     },
+    /// An item by alias name.
     ComplexAlias(Box<str>),
 }
 
@@ -169,20 +180,31 @@ pub fn tag_matches(tag: &str, item_name: &str) -> bool {
 /// Recipe grid layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecipeShape {
-    Shaped { width: u8, height: u8 },
+    /// Ingredients must be arranged in a `width` × `height` pattern.
+    Shaped {
+        /// Pattern width (1–3).
+        width: u8,
+        /// Pattern height (1–3).
+        height: u8,
+    },
+    /// Ingredients may be anywhere in the grid.
     Shapeless,
 }
 
 /// A crafting recipe.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Recipe {
+    /// Network id used in craft requests.
     pub network_id: u32,
+    /// Recipe identifier.
     pub id: Box<str>,
+    /// Grid layout.
     pub shape: RecipeShape,
     /// Non-empty ingredients with their counts.
     pub inputs: Box<[(Ingredient, i32)]>,
     /// All input cells as sent (shaped recipes include empty cells).
     pub grid: Box<[(Ingredient, i32)]>,
+    /// The crafted item (count per craft).
     pub output: ItemStack,
 }
 
@@ -385,7 +407,9 @@ impl RecipeBook {
 /// A resolved crafting plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CraftPlan {
+    /// The recipe to craft.
     pub recipe: Recipe,
+    /// How many times to craft it.
     pub times: u8,
     /// `(unified slot, count)` to consume.
     pub consumes: Vec<(u8, u8)>,
@@ -394,9 +418,13 @@ pub struct CraftPlan {
 /// Why no plan could be made.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CraftError {
+    /// The output item is not known.
     UnknownItem,
+    /// No recipe produces the item.
     NoRecipe,
+    /// The recipe needs a 3×3 grid.
     NeedsCraftingTable,
+    /// The inventory lacks ingredients.
     MissingIngredients,
 }
 

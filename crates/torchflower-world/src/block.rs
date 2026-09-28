@@ -14,12 +14,15 @@ use torchflower_protocol_core::wire::NbtValue;
 pub struct BlockFlags(pub u16);
 
 impl BlockFlags {
+    /// No flags.
     pub const NONE: Self = Self(0);
     /// Has a collision box.
     pub const SOLID: Self = Self(1 << 0);
     /// Water-like or lava-like liquid.
     pub const LIQUID: Self = Self(1 << 1);
+    /// Water or bubble column.
     pub const WATER: Self = Self(1 << 2);
+    /// Lava.
     pub const LAVA: Self = Self(1 << 3);
     /// Ladders, vines, scaffolding.
     pub const CLIMBABLE: Self = Self(1 << 4);
@@ -68,11 +71,20 @@ impl std::ops::BitOr for BlockFlags {
 pub enum Shape {
     /// No collision.
     Empty,
-    /// Full-width box from `lo/16` to `hi/16` (hi may exceed 16, e.g. fences = 24).
-    Box { lo: u8, hi: u8 },
+    /// Full-width box from `lo/16` to `hi/16` blocks high (`hi` may exceed 16, e.g. fences are 24).
+    Box {
+        /// Bottom of the box in 1/16 blocks.
+        lo: u8,
+        /// Top of the box in 1/16 blocks.
+        hi: u8,
+    },
     /// Stairs: bottom (or top when `upside_down`) half plus a quarter step.
-    /// `dir` follows Bedrock `weirdo_direction`: 0 east, 1 west, 2 south, 3 north.
-    Stairs { dir: u8, upside_down: bool },
+    Stairs {
+        /// Bedrock `weirdo_direction`: 0 east, 1 west, 2 south, 3 north.
+        dir: u8,
+        /// True if the slab half is at the top.
+        upside_down: bool,
+    },
 }
 
 impl Shape {
@@ -131,24 +143,38 @@ impl Shape {
 /// Tool category that mines a block efficiently.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ToolKind {
+    /// No tool is preferred.
     None,
+    /// Pickaxe.
     Pickaxe,
+    /// Axe.
     Axe,
+    /// Shovel.
     Shovel,
+    /// Hoe.
     Hoe,
+    /// Shears.
     Shears,
+    /// Sword.
     Sword,
 }
 
 /// Tool material tier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ToolTier {
+    /// Wooden tools.
     Wood,
+    /// Golden tools.
     Gold,
+    /// Stone tools.
     Stone,
+    /// Copper tools.
     Copper,
+    /// Iron tools.
     Iron,
+    /// Diamond tools.
     Diamond,
+    /// Netherite tools.
     Netherite,
 }
 
@@ -181,7 +207,9 @@ impl ToolTier {
 /// A concrete tool held by the bot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Tool {
+    /// Tool category.
     pub kind: ToolKind,
+    /// Tool material tier.
     pub tier: ToolTier,
     /// Efficiency enchantment level.
     pub efficiency: u8,
@@ -262,8 +290,11 @@ pub fn block_info(name: &str) -> Option<&'static BlockInfo> {
 /// Derived static characteristics of a block name.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Material {
+    /// Material flags.
     pub flags: BlockFlags,
+    /// Default collision shape.
     pub shape: Shape,
+    /// Tool that mines the block fastest.
     pub tool: ToolKind,
     /// Minimum [`ToolTier::level`] (plus one) required for drops; 0 = hand ok.
     pub harvest: u8,
@@ -905,10 +936,15 @@ pub fn liquid_depth(states: Option<&NbtValue>) -> u8 {
 /// Inputs to [`dig_ticks`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DigContext {
+    /// Tool that mines the block fastest.
     pub tool: Option<Tool>,
+    /// Haste effect level (0 = none).
     pub haste: u8,
+    /// Mining fatigue effect level (0 = none).
     pub mining_fatigue: u8,
+    /// Head in water without Aqua Affinity (5x slower).
     pub in_water_without_aqua_affinity: bool,
+    /// Standing on the ground (5x slower when not).
     pub on_ground: bool,
 }
 

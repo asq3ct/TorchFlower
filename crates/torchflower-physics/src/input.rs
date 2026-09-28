@@ -5,49 +5,93 @@
 
 /// PlayerAuthInput input flag bits.
 pub mod flags {
+    /// `Ascend` input flag.
     pub const ASCEND: u128 = 1 << 0;
+    /// `Descend` input flag.
     pub const DESCEND: u128 = 1 << 1;
+    /// `JumpDown` input flag.
     pub const JUMP_DOWN: u128 = 1 << 3;
+    /// `SprintDown` input flag.
     pub const SPRINT_DOWN: u128 = 1 << 4;
+    /// `Jumping` input flag.
     pub const JUMPING: u128 = 1 << 6;
+    /// `AutoJumpingInWater` input flag.
     pub const AUTO_JUMPING_IN_WATER: u128 = 1 << 7;
+    /// `Sneaking` input flag.
     pub const SNEAKING: u128 = 1 << 8;
+    /// `SneakDown` input flag.
     pub const SNEAK_DOWN: u128 = 1 << 9;
+    /// `Up` input flag.
     pub const UP: u128 = 1 << 10;
+    /// `Down` input flag.
     pub const DOWN: u128 = 1 << 11;
+    /// `Left` input flag.
     pub const LEFT: u128 = 1 << 12;
+    /// `Right` input flag.
     pub const RIGHT: u128 = 1 << 13;
+    /// `UpLeft` input flag.
     pub const UP_LEFT: u128 = 1 << 14;
+    /// `UpRight` input flag.
     pub const UP_RIGHT: u128 = 1 << 15;
+    /// `WantUp` input flag.
     pub const WANT_UP: u128 = 1 << 16;
+    /// `WantDown` input flag.
     pub const WANT_DOWN: u128 = 1 << 17;
+    /// `Sprinting` input flag.
     pub const SPRINTING: u128 = 1 << 20;
+    /// `StartSprinting` input flag.
     pub const START_SPRINTING: u128 = 1 << 25;
+    /// `StopSprinting` input flag.
     pub const STOP_SPRINTING: u128 = 1 << 26;
+    /// `StartSneaking` input flag.
     pub const START_SNEAKING: u128 = 1 << 27;
+    /// `StopSneaking` input flag.
     pub const STOP_SNEAKING: u128 = 1 << 28;
+    /// `StartSwimming` input flag.
     pub const START_SWIMMING: u128 = 1 << 29;
+    /// `StopSwimming` input flag.
     pub const STOP_SWIMMING: u128 = 1 << 30;
+    /// `StartJumping` input flag.
     pub const START_JUMPING: u128 = 1 << 31;
+    /// `StartGliding` input flag.
     pub const START_GLIDING: u128 = 1 << 32;
+    /// `StopGliding` input flag.
     pub const STOP_GLIDING: u128 = 1 << 33;
+    /// `PerformItemInteraction` input flag.
     pub const PERFORM_ITEM_INTERACTION: u128 = 1 << 34;
+    /// `PerformBlockActions` input flag.
     pub const PERFORM_BLOCK_ACTIONS: u128 = 1 << 35;
+    /// `PerformItemStackRequest` input flag.
     pub const PERFORM_ITEM_STACK_REQUEST: u128 = 1 << 36;
+    /// `HandledTeleport` input flag.
     pub const HANDLED_TELEPORT: u128 = 1 << 37;
+    /// `Emoting` input flag.
     pub const EMOTING: u128 = 1 << 38;
+    /// `MissedSwing` input flag.
     pub const MISSED_SWING: u128 = 1 << 39;
+    /// `StartCrawling` input flag.
     pub const START_CRAWLING: u128 = 1 << 40;
+    /// `StopCrawling` input flag.
     pub const STOP_CRAWLING: u128 = 1 << 41;
+    /// `StartFlying` input flag.
     pub const START_FLYING: u128 = 1 << 42;
+    /// `StopFlying` input flag.
     pub const STOP_FLYING: u128 = 1 << 43;
+    /// `ClientAckServerData` input flag.
     pub const CLIENT_ACK_SERVER_DATA: u128 = 1 << 44;
+    /// `ClientPredictedVehicle` input flag.
     pub const CLIENT_PREDICTED_VEHICLE: u128 = 1 << 45;
+    /// `BlockBreakingDelayEnabled` input flag.
     pub const BLOCK_BREAKING_DELAY_ENABLED: u128 = 1 << 48;
+    /// `HorizontalCollision` input flag.
     pub const HORIZONTAL_COLLISION: u128 = 1 << 49;
+    /// `VerticalCollision` input flag.
     pub const VERTICAL_COLLISION: u128 = 1 << 50;
+    /// `DownLeft` input flag.
     pub const DOWN_LEFT: u128 = 1 << 51;
+    /// `DownRight` input flag.
     pub const DOWN_RIGHT: u128 = 1 << 52;
+    /// `StartUsingItem` input flag.
     pub const START_USING_ITEM: u128 = 1 << 53;
 }
 
@@ -65,9 +109,11 @@ pub struct InputTracker {
 /// Per-tick input summary for `PlayerAuthInput`.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct InputSnapshot {
+    /// Input flags (see [`flags`]).
     pub flags: u128,
     /// `(x, z)` move vector (x: left positive), scaled like the client.
     pub move_vector: [f32; 2],
+    /// Unscaled `(x, z)` movement input.
     pub raw_move_vector: [f32; 2],
 }
 

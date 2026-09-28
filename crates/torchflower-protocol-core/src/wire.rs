@@ -383,20 +383,31 @@ pub enum NbtFlavor {
 /// Decoded NBT value.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NbtValue {
+    /// End tag (empty compound terminator).
     End,
+    /// `TAG_Byte`.
     Byte(i8),
+    /// `TAG_Short`.
     Short(i16),
+    /// `TAG_Int`.
     Int(i32),
+    /// `TAG_Long`.
     Long(i64),
+    /// `TAG_Float`.
     Float(f32),
+    /// `TAG_Double`.
     Double(f64),
+    /// `TAG_Byte_Array`.
     ByteArray(Vec<u8>),
+    /// `TAG_String`.
     String(String),
     /// List element tag id and values.
     List(u8, Vec<NbtValue>),
     /// Ordered compound entries.
     Compound(Vec<(String, NbtValue)>),
+    /// `TAG_Int_Array`.
     IntArray(Vec<i32>),
+    /// `TAG_Long_Array`.
     LongArray(Vec<i64>),
 }
 

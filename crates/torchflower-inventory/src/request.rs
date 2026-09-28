@@ -12,48 +12,82 @@ pub const ITEM_STACK_REQUEST_ID: u32 = 0x93;
 /// A single stack request action.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StackAction {
+    /// Pick up items into another slot (usually the cursor).
     Take {
+        /// Items to move.
         count: u8,
+        /// Source slot.
         src: SlotInfo,
+        /// Destination slot.
         dst: SlotInfo,
     },
+    /// Put items down into a slot.
     Place {
+        /// Items to move.
         count: u8,
+        /// Source slot.
         src: SlotInfo,
+        /// Destination slot.
         dst: SlotInfo,
     },
+    /// Swap two slots.
     Swap {
+        /// First slot.
         src: SlotInfo,
+        /// Second slot.
         dst: SlotInfo,
     },
+    /// Drop items into the world.
     Drop {
+        /// Items to drop.
         count: u8,
+        /// Slot to drop from.
         src: SlotInfo,
+        /// Throw in a random direction.
         randomly: bool,
     },
+    /// Destroy items (creative only).
     Destroy {
+        /// Items to destroy.
         count: u8,
+        /// Slot to destroy from.
         src: SlotInfo,
     },
+    /// Use up items as crafting ingredients.
     Consume {
+        /// Items consumed.
         count: u8,
+        /// Slot consumed from.
         src: SlotInfo,
     },
+    /// Craft a recipe placed manually in the grid.
     CraftRecipe {
+        /// Recipe network id.
         recipe_network_id: u32,
+        /// Number of crafts.
         times: u8,
     },
+    /// Craft a recipe with ingredients chosen by the server (recipe book).
     CraftRecipeAuto {
+        /// Recipe network id.
         recipe_network_id: u32,
+        /// Number of crafts.
         times: u8,
+        /// Ingredients and counts, as listed by the recipe.
         ingredients: Vec<(Ingredient, i32)>,
     },
+    /// Take an item from the creative inventory.
     CraftCreative {
+        /// Creative item network id.
         creative_item_network_id: u32,
+        /// Number of items.
         times: u8,
     },
+    /// The expected craft results (sent after a craft action).
     CraftResultsDeprecated {
+        /// Items the craft produces.
         results: Vec<ItemStack>,
+        /// Number of crafts.
         times: u8,
     },
 }
@@ -155,7 +189,9 @@ impl StackAction {
 /// One request (a list of actions under a client request id).
 #[derive(Debug, Clone, PartialEq)]
 pub struct StackRequest {
+    /// Client request id (negative and odd, see [`RequestIds`]).
     pub request_id: i32,
+    /// Actions, applied in order.
     pub actions: Vec<StackAction>,
 }
 

@@ -11,6 +11,7 @@
 //! one server share a single copy.
 
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 pub mod inventory;
 pub mod item;
@@ -18,11 +19,13 @@ pub mod recipe;
 pub mod request;
 
 pub use inventory::{
-    decode_container_close, decode_inventory_content, decode_inventory_slot,
-    decode_item_stack_response, slot_type, window_id, ContainerOpen, Hand, Inventory, SlotInfo,
-    StackResponse, Window, ARMOR_START, OFFHAND_SLOT,
+    decode_container_close, decode_inventory_content, decode_inventory_content_for,
+    decode_inventory_slot, decode_inventory_slot_for, decode_item_stack_response, slot_type,
+    window_id, ContainerOpen, Hand, Inventory, SlotInfo, StackResponse, Window, ARMOR_START,
+    INVENTORY_CONTENT_COMPACT_PROTOCOL, INVENTORY_SLOT_COMPACT_PROTOCOL, OFFHAND_SLOT,
+    SIGNED_BLOCK_POS_PROTOCOL,
 };
-pub use item::{ItemEntry, ItemRegistry, ItemStack, ITEM_REGISTRY_ID};
+pub use item::{ItemEntry, ItemFormat, ItemRegistry, ItemStack, ITEM_REGISTRY_ID};
 pub use recipe::{
     craft_request, plan_craft, CraftError, CraftPlan, Ingredient, Recipe, RecipeBook, RecipeShape,
     CRAFTING_DATA_ID,

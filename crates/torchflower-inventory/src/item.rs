@@ -11,9 +11,13 @@ pub const ITEM_REGISTRY_ID: u32 = 0xa2;
 /// An item stack as sent on the wire.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ItemStack {
+    /// Item network id (0 = empty).
     pub network_id: i32,
+    /// Stack size.
     pub count: u16,
+    /// Metadata / damage value.
     pub metadata: u32,
+    /// Runtime id of the block the item places (0 if none).
     pub block_runtime_id: i32,
     /// Server stack network id (0 when absent).
     pub stack_id: i32,
@@ -103,6 +107,82 @@ impl ItemStack {
         }
     }
 
+    /// Decodes an item in the requested wire [`ItemFormat`].
+    pub fn read_with(r: &mut WireReader<'_>, format: ItemFormat) -> Result<Self, WireError> {
+        match format {
+            ItemFormat::Legacy => Self::read_instance(r),
+            ItemFormat::Compact => Self::read_compact(r),
+        }
+    }
+
+    /// Encodes an item in the requested wire [`ItemFormat`].
+    pub fn write_with(&self, out: &mut Vec<u8>, format: ItemFormat) {
+        match format {
+            ItemFormat::Legacy => self.write_instance(out),
+            ItemFormat::Compact => self.write_compact(out),
+        }
+    }
+
+    /// Decodes the compact `ItemInstance` layout (introduced with protocol
+    /// 975 for some packets): an `int16` network id, and every field present
+    /// even for air.
+    pub fn read_compact(r: &mut WireReader<'_>) -> Result<Self, WireError> {
+        let network_id = r.i16_le()? as i32;
+        let count = r.u16_le()?;
+        let metadata = r.var_u32()?;
+        let mut stack_id = 0;
+        if r.bool()? {
+            r.var_u32()?; // reserved, always zero
+            stack_id = r.var_i32()?;
+        }
+        let block_runtime_id = r.var_u32()? as i32;
+        let extra = r.byte_slice()?;
+        if network_id == 0 {
+            return Ok(Self::default());
+        }
+        Ok(Self {
+            network_id,
+            count,
+            metadata,
+            block_runtime_id,
+            stack_id,
+            extra: extra.into(),
+        })
+    }
+
+    /// Encodes the compact `ItemInstance` layout.
+    pub fn write_compact(&self, out: &mut Vec<u8>) {
+        let empty = self.is_empty();
+        let id = if empty { 0 } else { self.network_id as i16 };
+        out.extend_from_slice(&id.to_le_bytes());
+        out.extend_from_slice(&(if empty { 0 } else { self.count }).to_le_bytes());
+        put_var_u32(out, if empty { 0 } else { self.metadata });
+        if !empty && self.stack_id != 0 {
+            out.push(1);
+            put_var_u32(out, 0);
+            put_var_i32(out, self.stack_id);
+        } else {
+            out.push(0);
+        }
+        put_var_u32(
+            out,
+            if empty {
+                0
+            } else {
+                self.block_runtime_id as u32
+            },
+        );
+        if empty {
+            put_var_u32(out, 0);
+        } else if self.extra.is_empty() {
+            put_var_u32(out, 10);
+            out.extend_from_slice(&[0; 10]);
+        } else {
+            put_var_u32(out, self.extra.len() as u32);
+            out.extend_from_slice(&self.extra);
+        }
+    }
+
     /// Heap bytes owned. Extra data is kept raw (not parsed into an NBT
     /// tree) to keep slots small.
     pub fn heap_bytes(&self) -> usize {
@@ -110,11 +190,25 @@ impl ItemStack {
     }
 }
 
+/// Wire encoding of an item stack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ItemFormat {
+    /// Zig-zag varint network id; air is a single `0` byte.
+    Legacy,
+    /// `int16` network id with all fields always present (1.26.20+ for
+    /// `InventorySlot`/`MobEquipment`, 1.26.30+ also for `InventoryContent`
+    /// and inventory transactions).
+    Compact,
+}
+
 /// One entry of the item registry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ItemEntry {
+    /// Identifier, e.g. `minecraft:bread`.
     pub name: Box<str>,
+    /// Network id used in item stacks.
     pub network_id: i16,
+    /// Whether the item is defined by components (custom items).
     pub component_based: bool,
 }
 

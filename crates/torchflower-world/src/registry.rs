@@ -166,6 +166,18 @@ impl BlockRegistry {
         Ok(Self::from_states(states, mode))
     }
 
+    /// Registry built from the vanilla palette embedded in the binary for
+    /// the given protocol version (see [`crate::palette_data`]).
+    ///
+    /// This needs no external files and resolves every vanilla block state
+    /// in both runtime-id modes. Custom (add-on) blocks sent in `StartGame`
+    /// are not included.
+    pub fn vanilla(protocol: i32, mode: RuntimeIdMode) -> Result<Self, crate::PaletteError> {
+        let palette = crate::embedded_palette_for(protocol)
+            .ok_or(crate::PaletteError("no embedded palette"))?;
+        Ok(Self::from_states(palette.states()?, mode))
+    }
+
     /// Minimal registry used when no canonical palette is available.
     ///
     /// In hashed mode air, water and lava are recognised exactly; everything
@@ -454,6 +466,51 @@ mod tests {
         assert!(reg.get(water).is_water());
         assert!(!reg.get(12345).is_known());
         assert!(reg.get(12345).is_solid());
+    }
+
+    #[test]
+    fn vanilla_registry_resolves_real_blocks_in_both_modes() {
+        for mode in [RuntimeIdMode::Hashed, RuntimeIdMode::Sequential] {
+            let reg = BlockRegistry::vanilla(898, mode).unwrap();
+            assert_eq!(reg.len(), 15845);
+            let air = reg.air_runtime_id().unwrap();
+            assert!(reg.get(air).is_air());
+            let stone = reg.runtime_ids_for_name("stone");
+            assert_eq!(stone.len(), 1);
+            assert!(reg.get(stone[0]).shape().is_full());
+            assert_eq!(reg.get(stone[0]).hardness(), 1.5);
+            let ore = reg.runtime_ids_for_name("minecraft:iron_ore");
+            assert_eq!(ore.len(), 1);
+            let stairs = reg.runtime_ids_for_name("oak_stairs");
+            assert_eq!(stairs.len(), 8);
+            let slab = reg.runtime_ids_for_name("oak_slab");
+            assert!(slab
+                .iter()
+                .any(|r| reg.get(*r).shape() == Shape::Box { lo: 8, hi: 16 }));
+            assert!(slab
+                .iter()
+                .any(|r| reg.get(*r).shape() == Shape::Box { lo: 0, hi: 8 }));
+        }
+        let reg_heap = BlockRegistry::vanilla(898, RuntimeIdMode::Hashed)
+            .unwrap()
+            .heap_bytes();
+        eprintln!("vanilla registry heap: {reg_heap} bytes");
+        assert!(
+            reg_heap < 1024 * 1024,
+            "shared registry is {reg_heap} bytes"
+        );
+        // Hashed ids are the published BDS values.
+        let reg = BlockRegistry::vanilla(898, RuntimeIdMode::Hashed).unwrap();
+        // An add-on block's hash is simply unknown: a solid cube, never
+        // mistaken for a vanilla block.
+        let custom = network_block_hash("myaddon:crystal", Some(&NbtValue::Compound(vec![])));
+        assert!(!reg.get(custom).is_known());
+        assert!(reg.get(custom).is_solid());
+        assert_eq!(reg.air_runtime_id(), Some(-604_749_536i32 as u32));
+        assert_eq!(
+            reg.runtime_ids_for_name("stone"),
+            vec![-2_144_268_767i32 as u32]
+        );
     }
 
     #[test]

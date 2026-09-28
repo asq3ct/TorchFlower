@@ -24,6 +24,7 @@
 //! 50 ms from the physics simulation.
 
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 mod bot;
 mod driver;
@@ -33,10 +34,12 @@ pub mod protocol;
 pub mod state;
 pub mod transport;
 
-pub use bot::{Block, Bot, TorchFlower};
+pub use bot::{Block, Bot, DigOptions, TorchFlower};
 pub use entity::{Entity, EntityTable};
 pub use error::{BotError, BotResult};
-pub use state::{shared_registry, Auth, BotConfig, BotEvent, BotState};
+pub use state::{
+    shared_registry, Auth, AutoEatConfig, BotConfig, BotEvent, BotState, DEFAULT_FOODS,
+};
 pub use transport::{EngineTransport, Transport};
 
 pub use torchflower_inventory::{Hand, Inventory, ItemStack, Window};

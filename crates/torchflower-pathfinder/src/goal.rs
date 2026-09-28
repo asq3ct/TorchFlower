@@ -26,6 +26,7 @@ fn octile(dx: i32, dy: i32, dz: i32) -> f32 {
 pub struct GoalBlock(pub BlockPos);
 
 impl GoalBlock {
+    /// Goal at `(x, y, z)`.
     pub fn new(x: i32, y: i32, z: i32) -> Self {
         Self(BlockPos::new(x, y, z))
     }
@@ -43,11 +44,14 @@ impl Goal for GoalBlock {
 /// Get within `range` blocks (Euclidean, feet) of a position.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GoalNear {
+    /// Target position.
     pub pos: BlockPos,
+    /// Maximum distance in blocks.
     pub range: f32,
 }
 
 impl GoalNear {
+    /// Goal within `range` blocks of `pos`.
     pub fn new(pos: BlockPos, range: impl Into<f64>) -> Self {
         Self {
             pos,
@@ -69,7 +73,9 @@ impl Goal for GoalNear {
 /// Reach a column (any Y).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GoalXZ {
+    /// Target X.
     pub x: i32,
+    /// Target Z.
     pub z: i32,
 }
 

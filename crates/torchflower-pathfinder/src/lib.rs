@@ -7,6 +7,7 @@
 //! each tick and requests dig/place actions from the bot.
 
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 pub mod follow;
 pub mod goal;

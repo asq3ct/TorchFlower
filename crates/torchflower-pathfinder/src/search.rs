@@ -32,7 +32,9 @@ pub trait PathWorld {
 /// [`PathWorld`] adapter for a [`SparseWorld`] with a caller-provided dig
 /// cost function (usually "best tool in the inventory").
 pub struct WorldView<'a, F> {
+    /// The world to plan in.
     pub world: &'a SparseWorld,
+    /// Ticks to break a block (`None` = may not be broken).
     pub dig: F,
 }
 
@@ -54,14 +56,23 @@ where
 /// Movement primitive used to reach a step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MoveKind {
+    /// Walk one block.
     Walk,
+    /// Walk one block diagonally.
     Diagonal,
+    /// Jump up one block.
     Ascend,
+    /// Drop down one or more blocks.
     Descend,
+    /// Sprint-jump over a gap.
     Parkour,
+    /// Swim or climb.
     Swim,
+    /// Jump and place a block underneath.
     Pillar,
+    /// Place a block ahead and walk onto it.
     Bridge,
+    /// Dig the block below and drop into it.
     DigDown,
 }
 
@@ -70,6 +81,7 @@ pub enum MoveKind {
 pub struct Step {
     /// Feet position to reach.
     pub pos: BlockPos,
+    /// Movement used for this step.
     pub kind: MoveKind,
     /// Blocks that must be broken before moving (in order).
     pub dig: [Option<BlockPos>; 3],
@@ -80,13 +92,19 @@ pub struct Step {
 /// Planner options.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PathOptions {
+    /// Maximum nodes expanded per search.
     pub max_nodes: usize,
+    /// Maximum time per search.
     pub timeout: Duration,
+    /// Allow breaking blocks in the way.
     pub allow_dig: bool,
     /// Number of scaffolding blocks available for bridging / pillaring.
     pub scaffold_blocks: u32,
+    /// Allow sprint-jumping over gaps.
     pub allow_parkour: bool,
+    /// Allow sprinting.
     pub allow_sprint: bool,
+    /// Highest safe drop in blocks (landing in water is always allowed).
     pub max_drop: i32,
 }
 
@@ -118,9 +136,13 @@ pub enum PathStatus {
 /// Result of [`find_path`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct PathResult {
+    /// Whether the goal was reached.
     pub status: PathStatus,
+    /// Waypoints from start to end.
     pub steps: Vec<Step>,
+    /// Estimated cost in ticks.
     pub cost: f32,
+    /// Nodes expanded.
     pub visited: usize,
 }
 

@@ -1,0 +1,72 @@
+// Reference values computed from pmmp/BedrockData 1.21.130
+// canonical_block_states.nbt with an independent script (see tools/).
+
+/// `(state index, block name, network hash)`.
+const REFERENCE_1_21_130: &[(usize, &str, u32)] = &[
+    (0, "minecraft:cyan_terracotta", 973836165),
+    (1, "minecraft:hard_pink_stained_glass", 4264272530),
+    (614, "minecraft:cherry_hanging_sign", 2813975663),
+    (791, "minecraft:cherry_hanging_sign", 3039552268),
+    (812, "minecraft:cherry_hanging_sign", 2160073341),
+    (950, "minecraft:brick_wall", 4214034479),
+    (968, "minecraft:brick_wall", 1441829876),
+    (1013, "minecraft:cobbled_deepslate_stairs", 2123310990),
+    (1144, "minecraft:red_sandstone_wall", 594691388),
+    (1186, "minecraft:red_sandstone_wall", 2349240731),
+    (1357, "minecraft:oak_stairs", 3240922889),
+    (1358, "minecraft:oak_stairs", 3302397712),
+    (1359, "minecraft:oak_stairs", 3117973243),
+    (1360, "minecraft:oak_stairs", 3179448066),
+    (1361, "minecraft:oak_stairs", 1903002988),
+    (1362, "minecraft:oak_stairs", 1841528165),
+    (1408, "minecraft:bamboo_door", 1409200923),
+    (1486, "minecraft:chiseled_bookshelf", 3060192821),
+    (1542, "minecraft:chiseled_bookshelf", 2933508615),
+    (2028, "minecraft:deepslate_brick_wall", 1947417349),
+    (2471, "minecraft:stripped_jungle_log", 516789807),
+    (3517, "minecraft:polished_blackstone_brick_wall", 2019298221),
+    (3657, "minecraft:mossy_cobblestone_wall", 340337725),
+    (3943, "minecraft:cobblestone_wall", 1743825040),
+    (5305, "minecraft:copper_chest", 1415168726),
+    (5991, "minecraft:blackstone_wall", 900608911),
+    (6468, "minecraft:acacia_log", 4159895696),
+    (6499, "minecraft:hard_blue_stained_glass", 2940554290),
+    (6828, "minecraft:unknown", 4294967294),
+    (6851, "minecraft:mangrove_fence_gate", 2513571015),
+    (6955, "minecraft:bamboo_hanging_sign", 2794902393),
+    (7104, "minecraft:bamboo_hanging_sign", 2711998822),
+    (8313, "minecraft:border_block", 501534358),
+    (8779, "minecraft:waxed_double_cut_copper_slab", 2051393841),
+    (9028, "minecraft:pale_oak_hanging_sign", 2278345674),
+    (9264, "minecraft:weeping_vines", 3351166131),
+    (9455, "minecraft:stone_brick_wall", 775529580),
+    (9548, "minecraft:andesite_wall", 3578082689),
+    (9551, "minecraft:andesite_wall", 396588904),
+    (9593, "minecraft:andesite_wall", 308118232),
+    (10279, "minecraft:spruce_hanging_sign", 437066049),
+    (10332, "minecraft:spruce_hanging_sign", 2106657219),
+    (10664, "minecraft:mangrove_hanging_sign", 4018250822),
+    (13455, "minecraft:crimson_hanging_sign", 2177808456),
+    (13547, "minecraft:crimson_hanging_sign", 1814590371),
+    (14904, "minecraft:polished_deepslate_wall", 1548740870),
+    (15523, "minecraft:cobbled_deepslate_wall", 67533629),
+    (15527, "minecraft:cobbled_deepslate_wall", 3531390259),
+    (15529, "minecraft:cobbled_deepslate_wall", 1675442096),
+    (15844, "minecraft:dandelion", 2383143704),
+];
+/// FNV-1a over the little-endian hashes of all 15845 states, in order.
+const REFERENCE_1_21_130_ALL_HASHES: u32 = 2506845698;
+
+/// `(BedrockData tag, state count, FNV-1a over the little-endian network hashes
+/// of every state in canonical order)`, computed from the original NBT files.
+const REFERENCE_ALL_PALETTES: &[(&str, usize, u32)] = &[
+    ("bedrock-1.21.50", 15162, 1535995415),
+    ("bedrock-1.21.60", 15168, 3222289007),
+    ("bedrock-1.21.70", 15237, 1436059491),
+    ("bedrock-1.21.80", 15253, 181308565),
+    ("6.0.0+bedrock-1.21.100", 15285, 4282454766),
+    ("bedrock-1.21.111", 15845, 2506845698),
+    ("bedrock-1.26.10", 15846, 3452532996),
+    ("bedrock-1.26.20", 16899, 4010964260),
+    ("bedrock-1.26.30", 16913, 2066492609),
+];

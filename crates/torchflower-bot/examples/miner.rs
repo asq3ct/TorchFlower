@@ -4,12 +4,18 @@
 //! cargo run -p torchflower-bot --example miner -- 127.0.0.1 19132 Miner [canonical_block_states.nbt]
 //! ```
 //!
+//! The block palette for the server's protocol is embedded, so the last
+//! argument is only needed for servers with a non-vanilla palette.
+//!
 //! Only connect to servers you own or have permission to test on. Commands in
-//! chat: `!mine <block>`, `!come`, `!follow`, `!stop`, `!pos`.
+//! chat: `!mine <block>`, `!come`, `!follow`, `!stop`, `!pos`, `!eat`,
+//! `!collect`, `!menu <button>`.
 
 use std::sync::Arc;
 
-use torchflower_bot::{BlockPos, Bot, BotConfig, BotResult, GoalGetToBlock, GoalNear};
+use torchflower_bot::{
+    BlockPos, Bot, BotConfig, BotEvent, BotResult, DigOptions, GoalGetToBlock, GoalNear,
+};
 
 #[tokio::main]
 async fn main() -> BotResult<()> {
@@ -36,7 +42,13 @@ async fn main() -> BotResult<()> {
                     return bot.chat(format!("no {name} nearby")).await;
                 };
                 bot.navigate_to(GoalGetToBlock(target.pos)).await?;
-                bot.dig(target.pos).await?;
+                bot.dig_with(
+                    target.pos,
+                    DigOptions {
+                        collect_drops: true,
+                    },
+                )
+                .await?;
                 bot.chat(format!("{name} mined!")).await?;
             }
             Some("!come") => {
@@ -52,14 +64,31 @@ async fn main() -> BotResult<()> {
                 }
             }
             Some("!stop") => bot.stop()?,
+            Some("!eat") => {
+                let id = bot.eat().await?;
+                let food = bot.item_name(id).unwrap_or_else(|| id.to_string());
+                bot.chat(format!("ate {food}")).await?;
+            }
+            Some("!collect") => {
+                let n = bot.collect_drops(8.0).await?;
+                bot.chat(format!("picked up {n} stacks")).await?;
+            }
+            Some("!menu") => {
+                // Clicks a button of the most recent server form.
+                let button = words.next().and_then(|b| b.parse().ok()).unwrap_or(0);
+                if let Some((form_id, _)) = bot.open_forms().pop() {
+                    bot.click_form_button(form_id, button).await?;
+                }
+            }
             Some("!pos") => {
                 let p = bot.position();
                 bot.chat(format!(
-                    "{:.1} {:.1} {:.1} (state {} KiB)",
+                    "{:.1} {:.1} {:.1} (state {} KiB, {} corrections)",
                     p.x,
                     p.y,
                     p.z,
-                    bot.heap_bytes() / 1024
+                    bot.heap_bytes() / 1024,
+                    bot.with_state(|s| s.corrections)
                 ))
                 .await?;
             }
@@ -71,11 +100,17 @@ async fn main() -> BotResult<()> {
     let mut events = bot.events();
     while let Ok(ev) = events.recv().await {
         match ev {
-            torchflower_bot::BotEvent::Disconnected(r) => {
+            BotEvent::Disconnected(r) => {
                 println!("disconnected: {r}");
                 break;
             }
-            torchflower_bot::BotEvent::HandlerError(e) => eprintln!("handler error: {e}"),
+            BotEvent::FormRequest { form_id, data } => {
+                println!(
+                    "form {form_id}: {}",
+                    data.chars().take(120).collect::<String>()
+                );
+            }
+            BotEvent::HandlerError(e) => eprintln!("handler error: {e}"),
             _ => {}
         }
     }

@@ -9,11 +9,14 @@
 //!   `SubChunkRequest`.
 
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 pub mod block;
 mod block_table;
 pub mod chunk;
 pub mod palette;
+pub mod palette_data;
+mod palette_index;
 pub mod raycast;
 pub mod registry;
 pub mod world;
@@ -24,6 +27,7 @@ pub use block::{
 };
 pub use chunk::{LevelChunk, SubChunk, SubChunkMode, SubChunkResult};
 pub use palette::PalettedStorage;
+pub use palette_data::{embedded_palette_for, embedded_palettes, EmbeddedPalette, PaletteError};
 pub use raycast::RaycastHit;
 pub use registry::{network_block_hash, BlockRef, BlockRegistry, RuntimeIdMode};
 pub use world::{face_normal, BlockPos, ChunkInsert, SparseWorld, WindowConfig};

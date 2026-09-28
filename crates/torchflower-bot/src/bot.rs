@@ -21,11 +21,21 @@ use crate::error::{BotError, BotResult};
 use crate::state::{Auth, BotConfig, BotEvent, BotState};
 use crate::transport::{EngineTransport, Transport};
 
+/// Options for [`Bot::dig_with`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DigOptions {
+    /// Walk over the block's drops after it breaks.
+    pub collect_drops: bool,
+}
+
 /// A resolved block in the world.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Block {
+    /// Block position.
     pub pos: BlockPos,
+    /// Full identifier, e.g. `minecraft:iron_ore`.
     pub name: String,
+    /// Network runtime id of the block state.
     pub runtime_id: u32,
 }
 
@@ -347,7 +357,22 @@ impl Bot {
     /// Breaks the block at `pos`: selects the best tool, looks at the block,
     /// runs the break timer and waits for the server's confirmation.
     pub async fn dig(&self, pos: BlockPos) -> BotResult<()> {
-        self.request(|r| Command::Dig { pos, reply: r }).await
+        self.dig_with(pos, DigOptions::default()).await
+    }
+
+    /// Like [`Bot::dig`], with options (e.g. collect the drop afterwards).
+    ///
+    /// With `collect_drops`, the call returns once the block is broken and
+    /// the bot has walked over the items that dropped within 4 blocks of it
+    /// (pickup is best effort: the dig still succeeds if nothing is
+    /// collected).
+    pub async fn dig_with(&self, pos: BlockPos, options: DigOptions) -> BotResult<()> {
+        self.request(|r| Command::Dig {
+            pos,
+            collect_drops: options.collect_drops,
+            reply: r,
+        })
+        .await
     }
 
     /// Aborts the current dig.
@@ -549,6 +574,132 @@ impl Bot {
     /// Requests a respawn after death.
     pub async fn respawn(&self) -> BotResult<()> {
         self.request(Command::Respawn).await
+    }
+
+    // ------------------------------------------------------------------
+    // Modal forms
+    // ------------------------------------------------------------------
+
+    /// Forms opened by the server and not yet answered, as
+    /// `(form_id, json)`.
+    pub fn open_forms(&self) -> Vec<(u32, String)> {
+        self.with_state(|s| s.open_forms.clone())
+    }
+
+    /// Answers form `form_id` with a raw JSON response: a button index
+    /// (`"0"`) for simple forms, `"true"`/`"false"` for modal forms, or an
+    /// array of values for custom forms (`["name", 2, true]`).
+    pub async fn submit_form(&self, form_id: u32, response_json: &str) -> BotResult<()> {
+        let json = response_json.trim().to_string();
+        if json.is_empty() {
+            return Err(BotError::Other("empty form response".into()));
+        }
+        self.request(|r| Command::FormResponse {
+            form_id,
+            response: Some(json),
+            reply: r,
+        })
+        .await
+    }
+
+    /// Clicks button `button_index` of a simple (menu) form.
+    pub async fn click_form_button(&self, form_id: u32, button_index: u32) -> BotResult<()> {
+        self.submit_form(form_id, &button_index.to_string()).await
+    }
+
+    /// Closes form `form_id` without answering it.
+    pub async fn close_form(&self, form_id: u32) -> BotResult<()> {
+        self.request(|r| Command::FormResponse {
+            form_id,
+            response: None,
+            reply: r,
+        })
+        .await
+    }
+
+    /// Waits for the next form request whose JSON satisfies `filter`
+    /// (bounded by `timeout`). Returns `(form_id, json)`.
+    pub async fn wait_for_form(
+        &self,
+        timeout: Duration,
+        filter: impl Fn(&str) -> bool,
+    ) -> BotResult<(u32, String)> {
+        let mut rx = self.events();
+        if let Some(f) = self.open_forms().into_iter().find(|f| filter(&f.1)) {
+            return Ok(f);
+        }
+        let wait = async {
+            loop {
+                match rx.recv().await {
+                    Ok(BotEvent::FormRequest { form_id, data }) if filter(&data) => {
+                        return Ok((form_id, data))
+                    }
+                    Ok(BotEvent::Disconnected(_)) | Err(broadcast::error::RecvError::Closed) => {
+                        return Err(BotError::Disconnected)
+                    }
+                    _ => {}
+                }
+            }
+        };
+        tokio::time::timeout(timeout, wait)
+            .await
+            .map_err(|_| BotError::Timeout("form request"))?
+    }
+
+    // ------------------------------------------------------------------
+    // Food
+    // ------------------------------------------------------------------
+
+    /// Eats the best food in the inventory (see [`AutoEatConfig::foods`])
+    /// and returns the network id of the item eaten. The previous hotbar
+    /// slot is restored afterwards.
+    ///
+    /// [`AutoEatConfig::foods`]: crate::AutoEatConfig::foods
+    pub async fn eat(&self) -> BotResult<i32> {
+        self.request(|r| Command::Eat {
+            network_id: None,
+            reply: r,
+        })
+        .await
+    }
+
+    /// Eats a specific food item by name.
+    pub async fn eat_item(&self, item_name: &str) -> BotResult<i32> {
+        let network_id = self
+            .item_id(item_name)
+            .ok_or_else(|| BotError::ItemNotFound(item_name.to_string()))?;
+        self.request(|r| Command::Eat {
+            network_id: Some(network_id),
+            reply: r,
+        })
+        .await
+    }
+
+    // ------------------------------------------------------------------
+    // Dropped items
+    // ------------------------------------------------------------------
+
+    /// Dropped item entities within `max_distance` blocks, nearest first.
+    pub fn nearby_drops(&self, max_distance: f32) -> Vec<Entity> {
+        self.with_state(|s| {
+            s.entities
+                .drops_near(s.player.pos, max_distance as f64)
+                .into_iter()
+                .filter_map(|(id, ..)| s.entities.get(id).cloned())
+                .collect()
+        })
+    }
+
+    /// Walks over every dropped item within `max_distance` blocks, nearest
+    /// first, until they are picked up (removed by `TakeItemActor` /
+    /// `RemoveActor`) or skipped after ~5 s each. Returns how many were
+    /// collected.
+    pub async fn collect_drops(&self, max_distance: f32) -> BotResult<u32> {
+        self.request(|r| Command::CollectDrops {
+            max_distance,
+            reply: r,
+        })
+        .await
     }
 
     /// Disconnects the bot.

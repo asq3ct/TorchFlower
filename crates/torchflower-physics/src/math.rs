@@ -5,12 +5,16 @@ use std::ops::{Add, Mul, Sub};
 /// 3D vector (f64).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Vec3 {
+    /// X component.
     pub x: f64,
+    /// Y component.
     pub y: f64,
+    /// Z component.
     pub z: f64,
 }
 
 impl Vec3 {
+    /// The zero vector.
     pub const ZERO: Vec3 = Vec3::new(0.0, 0.0, 0.0);
 
     /// Creates a vector.
@@ -68,7 +72,9 @@ impl Mul<f64> for Vec3 {
 /// Axis-aligned bounding box.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Aabb {
+    /// Minimum corner.
     pub min: Vec3,
+    /// Maximum corner.
     pub max: Vec3,
 }
 

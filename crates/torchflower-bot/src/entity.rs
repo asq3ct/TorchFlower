@@ -27,15 +27,23 @@ fn intern(kind: &str) -> &'static str {
 /// A tracked entity (~96 bytes; players additionally own their name).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Entity {
+    /// Runtime id used by most entity packets.
     pub runtime_id: u64,
+    /// Unique id (used by `RemoveActor`).
     pub unique_id: i64,
     /// Identifier such as `minecraft:zombie` (interned).
     pub kind: &'static str,
+    /// Player name (`None` for non-players).
     pub username: Option<Box<str>>,
+    /// Feet position.
     pub position: Vec3,
+    /// Velocity in blocks per tick.
     pub velocity: Vec3,
+    /// Yaw in degrees.
     pub yaw: f32,
+    /// Pitch in degrees.
     pub pitch: f32,
+    /// Whether the server reported the entity on the ground.
     pub on_ground: bool,
     /// For item entities: `(network_id, count)`.
     pub item: Option<(i32, u16)>,
@@ -47,6 +55,11 @@ impl Entity {
     /// True for players.
     pub fn is_player(&self) -> bool {
         self.username.is_some()
+    }
+
+    /// True for dropped item entities.
+    pub fn is_item(&self) -> bool {
+        self.item.is_some()
     }
 
     /// Approximate hitbox.
@@ -229,6 +242,22 @@ impl EntityTable {
         })
     }
 
+    /// Dropped item entities within `max_distance` of `center`, nearest
+    /// first: `(runtime_id, position, network_id, count)`.
+    pub fn drops_near(&self, center: Vec3, max_distance: f64) -> Vec<(u64, Vec3, i32, u16)> {
+        let mut out: Vec<(f64, (u64, Vec3, i32, u16))> = self
+            .entities
+            .iter()
+            .filter_map(|e| {
+                let (id, count) = e.item?;
+                let d = e.position.distance(center);
+                (d <= max_distance).then_some((d, (e.runtime_id, e.position, id, count)))
+            })
+            .collect();
+        out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        out.into_iter().map(|(_, v)| v).collect()
+    }
+
     /// Heap bytes owned.
     pub fn heap_bytes(&self) -> usize {
         self.entities.capacity() * std::mem::size_of::<Entity>()
@@ -302,5 +331,53 @@ mod tests {
         assert_eq!(t.prune(c), 1);
         assert!(t.remove_unique(4).is_some());
         assert!(t.is_empty());
+    }
+
+    #[test]
+    fn tracks_dropped_items() {
+        let mut t = EntityTable::new(8, 32.0);
+        let c = Vec3::ZERO;
+        t.spawn(
+            c,
+            10,
+            10,
+            "minecraft:item",
+            None,
+            Vec3::new(4.0, 0.0, 0.0),
+            Vec3::ZERO,
+            0.0,
+            0.0,
+            Some((5, 3)),
+        );
+        t.spawn(
+            c,
+            11,
+            11,
+            "minecraft:item",
+            None,
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::ZERO,
+            0.0,
+            0.0,
+            Some((6, 1)),
+        );
+        t.spawn(
+            c,
+            12,
+            12,
+            "minecraft:zombie",
+            None,
+            Vec3::new(0.5, 0.0, 0.0),
+            Vec3::ZERO,
+            0.0,
+            0.0,
+            None,
+        );
+        let drops = t.drops_near(c, 8.0);
+        assert_eq!(drops.iter().map(|d| d.0).collect::<Vec<_>>(), vec![11, 10]);
+        assert_eq!((drops[1].2, drops[1].3), (5, 3));
+        assert_eq!(t.drops_near(c, 2.0).len(), 1);
+        assert!(t.remove_runtime(11).is_some());
+        assert_eq!(t.drops_near(c, 8.0).len(), 1);
     }
 }
