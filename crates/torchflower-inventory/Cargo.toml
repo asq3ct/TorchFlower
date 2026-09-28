@@ -1,0 +1,17 @@
+[package]
+name = "torchflower-inventory"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Bedrock inventory model, ItemStackRequest builders, recipe decoding and crafting planner for TorchFlower bots."
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/torchflower-inventory"
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+
+[dependencies]
+torchflower-protocol-core = { version = "0.1.0", path = "../torchflower-protocol-core" }
+torchflower-world = { version = "0.1.0", path = "../torchflower-world" }

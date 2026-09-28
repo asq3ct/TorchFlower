@@ -2,6 +2,7 @@
 #![recursion_limit = "256"]
 #![allow(
     clippy::collapsible_if,
+    clippy::collapsible_else_if,
     clippy::excessive_precision,
     clippy::field_reassign_with_default,
     clippy::manual_div_ceil,

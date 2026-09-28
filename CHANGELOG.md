@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `torchflower-bot`: server-authoritative movement reconciliation. `CorrectPlayerMovePrediction` and `MovePlayer` snap the simulated player, replace its velocity (clamped, so a malformed packet cannot stall the collision sweep), clear the reported delta, acknowledge teleports and keep navigation going by re-anchoring the path follower. Corrections for a tick the bot has not sent are ignored, and the input tick stays a monotonic local clock.
+- `torchflower-bot`: modal form support (`BotEvent::FormRequest`, `submit_form`, `click_form_button`, `close_form`, `wait_for_form`, server-side close).
+- `torchflower-bot`: eating (`eat`, `eat_item`) and auto-eat (`BotConfig::auto_eat`, `AutoEatConfig`), following the vanilla click-air/consume sequence.
+- `torchflower-bot`: dropped-item tracking, `collect_drops`, `nearby_drops`, and `dig_with(DigOptions { collect_drops })`.
+- `torchflower-bot`: version-aware packet layouts for every change between protocols 766 and 1001 that affects the packets it uses.
+- `torchflower-world`: embedded vanilla block palettes for protocols 766–1001 (`BlockRegistry::vanilla`), so no external `canonical_block_states.nbt` is needed.
+- `torchflower-bot`: Mineflayer-style async `Bot` API. It covers chat and commands, `on_chat` handlers, digging with best-tool selection and server confirmation, block placement with reach and line-of-sight checks, equip/drop/swap, crafting, containers, navigation, following, attacking and respawning. A 20 Hz `PlayerAuthInput` loop drives it.
+- `torchflower-world`: sparse per-bot voxel window made of hot paletted sub-chunks and cold collision masks. It also adds `LevelChunk`/`SubChunk` decoding, `SubChunkRequest` encoding, a block registry for both sequential and hashed runtime ids, a block-property table from BedrockData (CC0), and raycasts.
+- `torchflower-physics`: AABB collision, gravity/drag/friction, step-up, jumping, sprinting, sneaking, swimming, climbing, fall damage and input flag generation.
+- `torchflower-inventory`: inventory and container model; `InventoryContent`, `InventorySlot`, `ItemStackResponse`, `ItemRegistry` and `CraftingData` decoders; `ItemStackRequest` builders; a crafting planner.
+- `torchflower-pathfinder`: bounded A* with walk, diagonal, ascend, descend, parkour, swim, bridge, pillar and dig moves, plus a path follower.
+- `torchflower-protocol-core::wire`: zero-copy slice reader, writers, packet framing and network/little-endian NBT.
+- `BedrockProtocolAdapter::recv_raw` and `observe_start_game`.
+
 - Microsoft device-code authentication with Xbox Live, standard XSTS, PlayFab XSTS, PlayFab login, Minecraft entitlement session initialization, legacy Bedrock authentication, and Bedrock JWT chain generation.
 - SQLite-backed account, token, entitlement, server, bot, and diagnostic persistence.
 - Authenticated Axum REST API with exact-origin CORS, loopback-only unauthenticated development mode, and redacted diagnostics defaults.

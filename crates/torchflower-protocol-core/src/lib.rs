@@ -1,3 +1,5 @@
+pub mod wire;
+
 use bytes::{Buf, BufMut};
 use uuid::Uuid;
 
